@@ -30,7 +30,7 @@ void standalone.bulk_close_deals()
 	   - DRY_RUN = true logs what it WOULD do and changes nothing.
 	   - Deals already on a closed stage are skipped.
 	   - Deals already carrying the tag are skipped, so re-runs are safe.
-	   - A summary mail is sent at the end with counts and failures.
+	   - Counts and any failures are printed to the execution log.
 	================================================================================
 	*/
 	// ======================== CONFIGURATION ========================
@@ -68,9 +68,6 @@ void standalone.bulk_close_deals()
 	// ---- Paging ----
 	PER_PAGE = 200;
 	MAX_PAGES = 10;
-	// Where the run summary is sent. The sender is zoho.loginuserid, the user
-	// running the function; the editor rejects any other unverified address.
-	ALERT_EMAIL = "quality.team@myoperator.com";
 	// ======================= CONFIGURATION ENDS =======================
 	info "=============================================";
 	info "bulk_close_deals started";
@@ -260,43 +257,13 @@ void standalone.bulk_close_deals()
 	info "Update failed : " + failed_count;
 	info "Note failed   : " + note_failed_count;
 	info "=============================================";
-	run_mode = "LIVE";
-	if(DRY_RUN)
-	{
-		run_mode = "DRY RUN (nothing was changed)";
-	}
-	mail_body = "<html><body style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#333;'>";
-	mail_body = mail_body + "<div style='max-width:640px;border:1px solid #e0e0e0;border-radius:4px;padding:20px;'>";
-	mail_body = mail_body + "<h3 style='margin:0 0 12px 0;border-bottom:2px solid #1565c0;padding-bottom:8px;'>Bulk Deal Closure Summary</h3>";
-	mail_body = mail_body + "<table cellpadding='6' cellspacing='0' style='border-collapse:collapse;width:100%;margin:14px 0;'>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Mode</b></td><td style='border:1px solid #e0e0e0;'>" + run_mode + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Target Stage</b></td><td style='border:1px solid #e0e0e0;'>" + TARGET_STAGE + "</td></tr>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Tag Applied</b></td><td style='border:1px solid #e0e0e0;'>" + TAG_NAME + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Cap For This Run</b></td><td style='border:1px solid #e0e0e0;'>" + MAX_RECORDS_PER_RUN + "</td></tr>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Eligible</b></td><td style='border:1px solid #e0e0e0;'>" + eligible_deals.size() + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Updated</b></td><td style='border:1px solid #e0e0e0;'>" + updated_count + "</td></tr>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Skipped</b></td><td style='border:1px solid #e0e0e0;'>" + skipped_count + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Update Failed</b></td><td style='border:1px solid #e0e0e0;'>" + failed_count + "</td></tr>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Note Failed</b></td><td style='border:1px solid #e0e0e0;'>" + note_failed_count + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Run At</b></td><td style='border:1px solid #e0e0e0;'>" + zoho.currenttime + "</td></tr>";
-	mail_body = mail_body + "</table>";
 	if(failure_log.size() > 0)
 	{
-		mail_body = mail_body + "<p><b>Failures</b></p><ul>";
+		info "--------------- FAILURES ---------------";
 		for each  failure in failure_log
 		{
-			mail_body = mail_body + "<li style='font-size:11px;'>" + failure + "</li>";
+			info failure;
 		}
-		mail_body = mail_body + "</ul>";
 	}
-	mail_body = mail_body + "<p style='font-size:11px;color:#777;'>Automated summary from Zoho CRM function bulk_close_deals.</p>";
-	mail_body = mail_body + "</div></body></html>";
-	sendmail
-	[
-		from :zoho.loginuserid
-		to :ALERT_EMAIL
-		subject :"Bulk Deal Closure - " + run_mode + " - " + updated_count + " deal(s)"
-		message :mail_body
-	]
-	info "Summary mail sent to " + ALERT_EMAIL;
+	info "bulk_close_deals finished";
 }
