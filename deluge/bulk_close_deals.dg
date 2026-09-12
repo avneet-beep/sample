@@ -68,7 +68,8 @@ void standalone.bulk_close_deals()
 	// ---- Paging ----
 	PER_PAGE = 200;
 	MAX_PAGES = 10;
-	// Where the run summary is sent.
+	// Where the run summary is sent. The sender is zoho.loginuserid, the user
+	// running the function; the editor rejects any other unverified address.
 	ALERT_EMAIL = "quality.team@myoperator.com";
 	// ======================= CONFIGURATION ENDS =======================
 	info "=============================================";
@@ -292,7 +293,7 @@ void standalone.bulk_close_deals()
 	mail_body = mail_body + "</div></body></html>";
 	sendmail
 	[
-		from :zoho.adminuserid
+		from :zoho.loginuserid
 		to :ALERT_EMAIL
 		subject :"Bulk Deal Closure - " + run_mode + " - " + updated_count + " deal(s)"
 		message :mail_body

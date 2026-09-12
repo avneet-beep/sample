@@ -392,7 +392,7 @@ void standalone.bulk_close_deals_api()
 	mail_body = mail_body + "</div></body></html>";
 	sendmail
 	[
-		from :zoho.adminuserid
+		from :zoho.loginuserid
 		to :ALERT_EMAIL
 		subject :"Bulk Deal Closure (API) - " + updated_count + " deal(s) updated"
 		message :mail_body
