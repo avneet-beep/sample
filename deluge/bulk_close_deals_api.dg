@@ -1,0 +1,357 @@
+/*
+================================================================================
+ Function : bulk_close_deals_api
+ Type     : Standalone Function  (Setup > Developer Space > Functions)
+ Purpose  : Same job as bulk_close_deals, but built for VOLUME.
+
+            Instead of one integration call per Deal, it uses the Zoho CRM v8
+            REST API in batches of 100:
+              PUT  /crm/v8/Deals                      -> stage update
+              POST /crm/v8/Deals/actions/add_tags     -> tag (purely additive)
+              POST /crm/v8/Notes                      -> notes
+
+            1000 Deals costs ~30 integration calls here instead of ~2000.
+
+ PREREQUISITE - a Connection
+   Setup > Developer Space > Connections > Create Connection
+     Service   : Zoho OAuth
+     Link Name : zcrm_conn          (paste it into CONNECTION_NAME below)
+     Scopes    : ZohoCRM.modules.ALL
+                 ZohoCRM.settings.tags.ALL
+                 ZohoCRM.settings.custom_views.READ
+
+ IMPORTANT
+   Same Closed Won / Closed Lost contradiction applies - set TARGET_STAGE
+   deliberately, and keep DRY_RUN = true for the first execution.
+================================================================================
+*/
+void bulk_close_deals_api()
+{
+	// ======================== CONFIGURATION ========================
+	DRY_RUN = true;
+	CONNECTION_NAME = "zcrm_conn";
+	// Change the domain to match your data centre:
+	//   India .in | Europe .eu | Australia .com.au | China .com.cn | US .com
+	API_DOMAIN = "https://www.zohoapis.in";  // org is on crm.zoho.in
+	TARGET_STAGE = "Closed Won";
+	TAG_NAME = "AutoClosed";
+	NOTE_TITLE = "Auto Closure - System Clean Up";
+	NOTE_CONTENT = "Marking all the deal as closed lost due to this might be moved into expension by our advisour or waiver or any other adjusment, to keep system clean making changes.";
+	USE_CUSTOM_VIEW = true;
+	CUSTOM_VIEW_ID = "833326000092565978";
+	SEARCH_CRITERIA = "(Stage:equals:Qualification) and (Closing_Date:less_than:2025-01-01)";
+	// Set to true to bypass workflows / blueprints on the stage update.
+	// Leave false if your workflows are supposed to fire on closure.
+	SKIP_WORKFLOWS = false;
+	CREATE_NOTES = true;
+	PER_PAGE = 200;
+	MAX_PAGES = 10;
+	MAX_RECORDS_PER_RUN = 1000;
+	BATCH_SIZE = 100;
+	ALERT_EMAIL = "quality.team@myoperator.com";
+	// ======================= CONFIGURATION ENDS =======================
+	info "bulk_close_deals_api started | DRY_RUN = " + DRY_RUN + " | TARGET_STAGE = " + TARGET_STAGE;
+	// ---------------------------------------------------------------
+	// STEP 1 : Collect the Deal IDs
+	// ---------------------------------------------------------------
+	deal_ids = List();
+	deal_names = Map();
+	for each index page_num in 1 to MAX_PAGES
+	{
+		fetch_params = Map();
+		fetch_params.put("fields","id,Deal_Name,Stage,Tag");
+		fetch_params.put("page",page_num);
+		fetch_params.put("per_page",PER_PAGE);
+		fetch_url = API_DOMAIN + "/crm/v8/Deals";
+		if(USE_CUSTOM_VIEW)
+		{
+			fetch_params.put("cvid",CUSTOM_VIEW_ID);
+		}
+		else
+		{
+			fetch_url = API_DOMAIN + "/crm/v8/Deals/search";
+			fetch_params.put("criteria",SEARCH_CRITERIA);
+		}
+		fetch_response = invokeurl
+		[
+			url :fetch_url
+			type :GET
+			parameters:fetch_params
+			connection:CONNECTION_NAME
+		];
+		page_data = fetch_response.getJSON("data");
+		if(page_data == null || page_data.size() == 0)
+		{
+			info "Page " + page_num + " empty - stopping fetch";
+			break;
+		}
+		info "Page " + page_num + " fetched " + page_data.size() + " record(s)";
+		for each  deal in page_data
+		{
+			current_stage = ifnull(deal.getJSON("Stage"),"");
+			// Skip anything already closed the way we want it.
+			if(current_stage == TARGET_STAGE)
+			{
+				continue;
+			}
+			// Skip anything a previous run already tagged.
+			existing_tags = deal.getJSON("Tag");
+			already_tagged = false;
+			if(existing_tags != null && existing_tags != "")
+			{
+				for each  existing_tag in existing_tags
+				{
+					if(existing_tag.getJSON("name") == TAG_NAME)
+					{
+						already_tagged = true;
+					}
+				}
+			}
+			if(already_tagged)
+			{
+				continue;
+			}
+			if(deal_ids.size() < MAX_RECORDS_PER_RUN)
+			{
+				deal_id = deal.getJSON("id");
+				deal_ids.add(deal_id);
+				deal_names.put(deal_id,ifnull(deal.getJSON("Deal_Name"),""));
+			}
+		}
+		if(deal_ids.size() >= MAX_RECORDS_PER_RUN)
+		{
+			info "MAX_RECORDS_PER_RUN reached - stopping fetch";
+			break;
+		}
+		more_records = fetch_response.getJSON("info").getJSON("more_records");
+		if(more_records != true)
+		{
+			break;
+		}
+	}
+	info "Eligible Deals = " + deal_ids.size();
+	if(deal_ids.size() == 0)
+	{
+		info "Nothing to process - exiting";
+		return;
+	}
+	if(DRY_RUN)
+	{
+		info "DRY_RUN - would set Stage = " + TARGET_STAGE + ", add tag " + TAG_NAME + " and a note on these " + deal_ids.size() + " Deal(s):";
+		info deal_names;
+		return;
+	}
+	// ---------------------------------------------------------------
+	// STEP 2 : Process in batches of 100
+	// ---------------------------------------------------------------
+	updated_count = 0;
+	failed_count = 0;
+	tagged_count = 0;
+	note_count = 0;
+	failure_log = List();
+	batch_start = 0;
+	total_batches = (deal_ids.size() / BATCH_SIZE).round(0);
+	if(total_batches * BATCH_SIZE < deal_ids.size())
+	{
+		total_batches = total_batches + 1;
+	}
+	for each index batch_num in 1 to total_batches
+	{
+		batch_end = batch_start + BATCH_SIZE;
+		if(batch_end > deal_ids.size())
+		{
+			batch_end = deal_ids.size();
+		}
+		if(batch_start >= batch_end)
+		{
+			break;
+		}
+		batch_ids = deal_ids.subList(batch_start,batch_end);
+		info "--- Batch " + batch_num + " of " + total_batches + " : " + batch_ids.size() + " Deal(s) ---";
+		// ---- 2a. Stage update ----
+		update_records = List();
+		for each  batch_id in batch_ids
+		{
+			record_map = Map();
+			record_map.put("id",batch_id);
+			record_map.put("Stage",TARGET_STAGE);
+			update_records.add(record_map);
+		}
+		update_body = Map();
+		update_body.put("data",update_records);
+		if(SKIP_WORKFLOWS)
+		{
+			update_body.put("trigger",List());
+		}
+		update_response = invokeurl
+		[
+			url :API_DOMAIN + "/crm/v8/Deals"
+			type :PUT
+			parameters:update_body.toString()
+			connection:CONNECTION_NAME
+			headers:{"Content-Type":"application/json"}
+		];
+		update_results = update_response.getJSON("data");
+		succeeded_ids = List();
+		if(update_results != null)
+		{
+			row_index = 0;
+			for each  row in update_results
+			{
+				row_id = batch_ids.get(row_index);
+				if(row.getJSON("status") == "success")
+				{
+					succeeded_ids.add(row_id);
+					updated_count = updated_count + 1;
+				}
+				else
+				{
+					failed_count = failed_count + 1;
+					failure_log.add(deal_names.get(row_id) + " (" + row_id + ") -> " + row.getJSON("message"));
+				}
+				row_index = row_index + 1;
+			}
+		}
+		else
+		{
+			failed_count = failed_count + batch_ids.size();
+			failure_log.add("Batch " + batch_num + " update call failed -> " + update_response);
+			batch_start = batch_end;
+			continue;
+		}
+		if(succeeded_ids.size() == 0)
+		{
+			batch_start = batch_end;
+			continue;
+		}
+		// ---- 2b. Tag (additive, existing tags untouched) ----
+		ids_param = "";
+		for each  succeeded_id in succeeded_ids
+		{
+			if(ids_param == "")
+			{
+				ids_param = succeeded_id;
+			}
+			else
+			{
+				ids_param = ids_param + "," + succeeded_id;
+			}
+		}
+		tag_params = Map();
+		tag_params.put("ids",ids_param);
+		tag_params.put("tag_names",TAG_NAME);
+		tag_params.put("over_write","false");
+		tag_response = invokeurl
+		[
+			url :API_DOMAIN + "/crm/v8/Deals/actions/add_tags"
+			type :POST
+			parameters:tag_params
+			connection:CONNECTION_NAME
+		];
+		tag_results = tag_response.getJSON("data");
+		if(tag_results != null)
+		{
+			for each  tag_row in tag_results
+			{
+				if(tag_row.getJSON("status") == "success")
+				{
+					tagged_count = tagged_count + 1;
+				}
+				else
+				{
+					failure_log.add("TAG failed -> " + tag_row.getJSON("message"));
+				}
+			}
+		}
+		else
+		{
+			failure_log.add("Batch " + batch_num + " tag call failed -> " + tag_response);
+		}
+		// ---- 2c. Notes ----
+		if(CREATE_NOTES)
+		{
+			note_records = List();
+			for each  succeeded_id in succeeded_ids
+			{
+				note_map = Map();
+				note_map.put("Note_Title",NOTE_TITLE);
+				note_map.put("Note_Content",NOTE_CONTENT);
+				note_map.put("Parent_Id",succeeded_id);
+				note_map.put("se_module","Deals");
+				note_records.add(note_map);
+			}
+			note_body = Map();
+			note_body.put("data",note_records);
+			note_response = invokeurl
+			[
+				url :API_DOMAIN + "/crm/v8/Notes"
+				type :POST
+				parameters:note_body.toString()
+				connection:CONNECTION_NAME
+				headers:{"Content-Type":"application/json"}
+			];
+			note_results = note_response.getJSON("data");
+			if(note_results != null)
+			{
+				for each  note_row in note_results
+				{
+					if(note_row.getJSON("status") == "success")
+					{
+						note_count = note_count + 1;
+					}
+					else
+					{
+						failure_log.add("NOTE failed -> " + note_row.getJSON("message"));
+					}
+				}
+			}
+			else
+			{
+				failure_log.add("Batch " + batch_num + " note call failed -> " + note_response);
+			}
+		}
+		batch_start = batch_end;
+	}
+	// ---------------------------------------------------------------
+	// STEP 3 : Summary
+	// ---------------------------------------------------------------
+	info "=============================================";
+	info "Eligible : " + deal_ids.size();
+	info "Updated  : " + updated_count;
+	info "Tagged   : " + tagged_count;
+	info "Notes    : " + note_count;
+	info "Failed   : " + failed_count;
+	info "=============================================";
+	mail_body = "<html><body style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#333;'>";
+	mail_body = mail_body + "<div style='max-width:640px;border:1px solid #e0e0e0;border-radius:4px;padding:20px;'>";
+	mail_body = mail_body + "<h3 style='margin:0 0 12px 0;border-bottom:2px solid #1565c0;padding-bottom:8px;'>Bulk Deal Closure Summary (API mode)</h3>";
+	mail_body = mail_body + "<table cellpadding='6' cellspacing='0' style='border-collapse:collapse;width:100%;margin:14px 0;'>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Target Stage</b></td><td style='border:1px solid #e0e0e0;'>" + TARGET_STAGE + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Tag Applied</b></td><td style='border:1px solid #e0e0e0;'>" + TAG_NAME + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Eligible</b></td><td style='border:1px solid #e0e0e0;'>" + deal_ids.size() + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Stage Updated</b></td><td style='border:1px solid #e0e0e0;'>" + updated_count + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Tagged</b></td><td style='border:1px solid #e0e0e0;'>" + tagged_count + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Notes Created</b></td><td style='border:1px solid #e0e0e0;'>" + note_count + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Failed</b></td><td style='border:1px solid #e0e0e0;'>" + failed_count + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Run At</b></td><td style='border:1px solid #e0e0e0;'>" + zoho.currenttime + "</td></tr>";
+	mail_body = mail_body + "</table>";
+	if(failure_log.size() > 0)
+	{
+		mail_body = mail_body + "<p><b>Failures</b></p><ul>";
+		for each  failure in failure_log
+		{
+			mail_body = mail_body + "<li style='font-size:11px;'>" + failure + "</li>";
+		}
+		mail_body = mail_body + "</ul>";
+	}
+	mail_body = mail_body + "<p style='font-size:11px;color:#777;'>Automated summary from Zoho CRM function bulk_close_deals_api.</p>";
+	mail_body = mail_body + "</div></body></html>";
+	sendmail
+	[
+		from :zoho.adminuserid
+		to :ALERT_EMAIL
+		subject :"Bulk Deal Closure (API) - " + updated_count + " deal(s) updated"
+		message :mail_body
+	]
+	info "Summary mail sent to " + ALERT_EMAIL;
+}

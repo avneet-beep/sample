@@ -1,0 +1,252 @@
+/*
+================================================================================
+ Function : bulk_close_deals
+ Type     : Standalone Function  (Setup > Developer Space > Functions)
+ Purpose  : Bulk close every Deal that matches a CRM filter (Custom View) or a
+            search criteria. For each matching Deal it does three things:
+
+              1. Updates Stage            -> TARGET_STAGE
+              2. Adds the tag             -> AutoClosed   (existing tags kept)
+              3. Creates a Note on the Deal explaining the closure
+
+ IMPORTANT - READ BEFORE RUNNING
+ --------------------------------------------------------------------------
+ The requirement says "change stage to Closed Won" but the note text says
+ "Marking all the deal as closed lost". These contradict each other.
+ Set TARGET_STAGE below to whichever is actually correct BEFORE you run this
+ with DRY_RUN = false. A mass stage change is not easily reversible.
+ --------------------------------------------------------------------------
+
+ SAFETY
+   - DRY_RUN = true by default. It only logs what it WOULD do, changes nothing.
+   - MAX_RECORDS_PER_RUN caps how many Deals one execution touches.
+   - Deals already on TARGET_STAGE are skipped (safe to re-run).
+   - Deals already carrying the tag are skipped (safe to re-run).
+   - A summary mail is sent at the end with counts and failures.
+================================================================================
+*/
+void bulk_close_deals()
+{
+	// ======================== CONFIGURATION ========================
+	// Set to false only after you have reviewed a DRY_RUN execution log.
+	DRY_RUN = true;
+	// Stage to set. "Closed Won" or "Closed Lost" - see note in the header.
+	TARGET_STAGE = "Closed Won";
+	// Tag to apply. Create this tag once in Setup > Tags, then paste its ID
+	// here. Passing the ID is what makes the tag stick reliably on update.
+	TAG_NAME = "AutoClosed";
+	TAG_ID = "";
+	// Note that gets attached to every Deal.
+	NOTE_TITLE = "Auto Closure - System Clean Up";
+	NOTE_CONTENT = "Marking all the deal as closed lost due to this might be moved into expension by our advisour or waiver or any other adjusment, to keep system clean making changes.";
+	// ---- How the Deals are picked ----
+	// Option A (recommended): use an existing CRM filter / Custom View.
+	//   Open the view in CRM, the cvid is the long number in the URL.
+	// Option B: use a search criteria string instead.
+	USE_CUSTOM_VIEW = true;
+	CUSTOM_VIEW_ID = "833326000092565978";
+	SEARCH_CRITERIA = "(Stage:equals:Qualification) and (Closing_Date:less_than:2025-01-01)";
+	// ---- Volume control ----
+	PER_PAGE = 200;
+	MAX_PAGES = 10;
+	MAX_RECORDS_PER_RUN = 200;
+	// Where the run summary is sent.
+	ALERT_EMAIL = "quality.team@myoperator.com";
+	// ======================= CONFIGURATION ENDS =======================
+	info "=============================================";
+	info "bulk_close_deals started";
+	info "DRY_RUN = " + DRY_RUN;
+	info "TARGET_STAGE = " + TARGET_STAGE;
+	info "TAG_NAME = " + TAG_NAME;
+	info "=============================================";
+	// ---------------------------------------------------------------
+	// STEP 1 : Collect the Deals
+	// ---------------------------------------------------------------
+	all_deals = List();
+	for each index page_num in 1 to MAX_PAGES
+	{
+		page_records = List();
+		if(USE_CUSTOM_VIEW)
+		{
+			fetch_params = Map();
+			fetch_params.put("cvid",CUSTOM_VIEW_ID);
+			page_records = zoho.crm.getRecords("Deals",page_num,PER_PAGE,fetch_params);
+		}
+		else
+		{
+			page_records = zoho.crm.searchRecords("Deals",SEARCH_CRITERIA,page_num,PER_PAGE);
+		}
+		info "Page " + page_num + " fetched " + page_records.size() + " record(s)";
+		if(page_records.size() == 0)
+		{
+			break;
+		}
+		for each  deal in page_records
+		{
+			if(all_deals.size() < MAX_RECORDS_PER_RUN)
+			{
+				all_deals.add(deal);
+			}
+		}
+		if(all_deals.size() >= MAX_RECORDS_PER_RUN)
+		{
+			info "MAX_RECORDS_PER_RUN reached - stopping fetch";
+			break;
+		}
+		if(page_records.size() < PER_PAGE)
+		{
+			break;
+		}
+	}
+	info "Total Deals picked up = " + all_deals.size();
+	if(all_deals.size() == 0)
+	{
+		info "Nothing to process - exiting";
+		return;
+	}
+	// ---------------------------------------------------------------
+	// STEP 2 : Process each Deal
+	// ---------------------------------------------------------------
+	updated_count = 0;
+	skipped_count = 0;
+	failed_count = 0;
+	note_failed_count = 0;
+	failure_log = List();
+	for each  deal in all_deals
+	{
+		deal_id = deal.getJSON("id");
+		deal_name = ifnull(deal.getJSON("Deal_Name"),"");
+		current_stage = ifnull(deal.getJSON("Stage"),"");
+		info "----------------------------------------";
+		info "Deal: " + deal_name + " (" + deal_id + ") | Stage: " + current_stage;
+		// --- Idempotency check 1 : already on the target stage ---
+		if(current_stage == TARGET_STAGE)
+		{
+			info "Already on " + TARGET_STAGE + " - skipping";
+			skipped_count = skipped_count + 1;
+			continue;
+		}
+		// --- Idempotency check 2 : already tagged by a previous run ---
+		existing_tags = deal.getJSON("Tag");
+		already_tagged = false;
+		tag_list = List();
+		if(existing_tags != null && existing_tags != "")
+		{
+			for each  existing_tag in existing_tags
+			{
+				existing_tag_name = existing_tag.getJSON("name");
+				if(existing_tag_name == TAG_NAME)
+				{
+					already_tagged = true;
+				}
+				// Carry the existing tags forward, otherwise they get wiped.
+				keep_tag = Map();
+				keep_tag.put("name",existing_tag_name);
+				keep_tag.put("id",existing_tag.getJSON("id"));
+				tag_list.add(keep_tag);
+			}
+		}
+		if(already_tagged)
+		{
+			info "Already carries tag " + TAG_NAME + " - skipping";
+			skipped_count = skipped_count + 1;
+			continue;
+		}
+		// Append the new tag.
+		new_tag = Map();
+		new_tag.put("name",TAG_NAME);
+		if(TAG_ID != null && TAG_ID != "")
+		{
+			new_tag.put("id",TAG_ID);
+		}
+		tag_list.add(new_tag);
+		// --- Build the update ---
+		update_map = Map();
+		update_map.put("Stage",TARGET_STAGE);
+		update_map.put("Tag",tag_list);
+		if(DRY_RUN)
+		{
+			info "DRY_RUN - would update with: " + update_map;
+			info "DRY_RUN - would add note: " + NOTE_TITLE;
+			updated_count = updated_count + 1;
+			continue;
+		}
+		// --- Update the Deal ---
+		update_result = zoho.crm.updateRecord("Deals",deal_id,update_map);
+		updated_id = update_result.get("id");
+		if(updated_id == null)
+		{
+			info "UPDATE FAILED: " + update_result;
+			failed_count = failed_count + 1;
+			failure_log.add(deal_name + " (" + deal_id + ") -> " + update_result);
+			continue;
+		}
+		info "Stage + tag updated";
+		updated_count = updated_count + 1;
+		// --- Attach the Note ---
+		note_map = Map();
+		note_map.put("Note_Title",NOTE_TITLE);
+		note_map.put("Note_Content",NOTE_CONTENT);
+		note_map.put("Parent_Id",deal_id);
+		note_map.put("se_module","Deals");
+		note_result = zoho.crm.createRecord("Notes",note_map);
+		if(note_result.get("id") == null)
+		{
+			info "NOTE FAILED: " + note_result;
+			note_failed_count = note_failed_count + 1;
+			failure_log.add("NOTE " + deal_name + " (" + deal_id + ") -> " + note_result);
+		}
+		else
+		{
+			info "Note attached";
+		}
+	}
+	// ---------------------------------------------------------------
+	// STEP 3 : Summary
+	// ---------------------------------------------------------------
+	info "=============================================";
+	info "Picked up     : " + all_deals.size();
+	info "Updated       : " + updated_count;
+	info "Skipped       : " + skipped_count;
+	info "Update failed : " + failed_count;
+	info "Note failed   : " + note_failed_count;
+	info "=============================================";
+	run_mode = "LIVE";
+	if(DRY_RUN)
+	{
+		run_mode = "DRY RUN (nothing was changed)";
+	}
+	mail_body = "<html><body style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#333;'>";
+	mail_body = mail_body + "<div style='max-width:640px;border:1px solid #e0e0e0;border-radius:4px;padding:20px;'>";
+	mail_body = mail_body + "<h3 style='margin:0 0 12px 0;border-bottom:2px solid #1565c0;padding-bottom:8px;'>Bulk Deal Closure Summary</h3>";
+	mail_body = mail_body + "<table cellpadding='6' cellspacing='0' style='border-collapse:collapse;width:100%;margin:14px 0;'>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Mode</b></td><td style='border:1px solid #e0e0e0;'>" + run_mode + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Target Stage</b></td><td style='border:1px solid #e0e0e0;'>" + TARGET_STAGE + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Tag Applied</b></td><td style='border:1px solid #e0e0e0;'>" + TAG_NAME + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Picked Up</b></td><td style='border:1px solid #e0e0e0;'>" + all_deals.size() + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Updated</b></td><td style='border:1px solid #e0e0e0;'>" + updated_count + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Skipped</b></td><td style='border:1px solid #e0e0e0;'>" + skipped_count + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Update Failed</b></td><td style='border:1px solid #e0e0e0;'>" + failed_count + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Note Failed</b></td><td style='border:1px solid #e0e0e0;'>" + note_failed_count + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Run At</b></td><td style='border:1px solid #e0e0e0;'>" + zoho.currenttime + "</td></tr>";
+	mail_body = mail_body + "</table>";
+	if(failure_log.size() > 0)
+	{
+		mail_body = mail_body + "<p><b>Failures</b></p><ul>";
+		for each  failure in failure_log
+		{
+			mail_body = mail_body + "<li style='font-size:11px;'>" + failure + "</li>";
+		}
+		mail_body = mail_body + "</ul>";
+	}
+	mail_body = mail_body + "<p style='font-size:11px;color:#777;'>Automated summary from Zoho CRM function bulk_close_deals.</p>";
+	mail_body = mail_body + "</div></body></html>";
+	sendmail
+	[
+		from :zoho.adminuserid
+		to :ALERT_EMAIL
+		subject :"Bulk Deal Closure - " + run_mode + " - " + updated_count + " deal(s)"
+		message :mail_body
+	]
+	info "Summary mail sent to " + ALERT_EMAIL;
+}
