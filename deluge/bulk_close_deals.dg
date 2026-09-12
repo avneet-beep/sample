@@ -51,10 +51,9 @@ void standalone.bulk_close_deals()
 	// Any extra field the layout makes mandatory on closure goes here, e.g.
 	// EXTRA_FIELDS.put("Reason_for_Loss","System clean up");
 	EXTRA_FIELDS = Map();
-	// Tag to apply. Create this tag once in Setup > Tags, then paste its ID
-	// here. Passing the ID is what makes the tag stick reliably on update.
+	// Tag to apply. Already created on the Deals module, ID below.
 	TAG_NAME = "AutoClosed";
-	TAG_ID = "";
+	TAG_ID = "833326000141307002";
 	// Note that gets attached to every Deal.
 	NOTE_TITLE = "Auto Closure - System Clean Up";
 	NOTE_CONTENT = "Marked as Closed Lost automatically. This deal may have been moved to an expansion by our advisor, or settled through a waiver or another adjustment. It is being closed here to keep the system clean.";

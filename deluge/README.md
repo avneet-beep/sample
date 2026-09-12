@@ -41,10 +41,11 @@ Negotiation/Review, Closed Won, Closed Lost, Closed Lost to Competition.
    as, otherwise the fetch returns `INVALID_DATA` on `cvid`. In CRM open the
    view, then *Edit > Share this view > All users* (or at least the admin who
    owns the function).
-2. **Create the tag** `AutoClosed` once under *Setup > Customization > Tags*,
-   open it, and copy its ID into `TAG_ID` in `bulk_close_deals.dg`. The API
-   version creates the tag on its own, so this step is only for the simple
-   version.
+2. **The tag is already created.** `AutoClosed` exists on the Deals module
+   with ID `833326000141307002`, already filled into `TAG_ID`. Note that Deals
+   sits at Zoho's cap of 100 tags, so freeing a slot means deleting an unused
+   tag from Manage Tags in the Deals list view. The API version adds the tag
+   through the add_tags endpoint and does not need the ID.
 3. **Paste the function** into *Setup > Developer Space > Functions >
    New Function*, category **Standalone**, and save.
 4. For `bulk_close_deals_api.dg` only, create the connection described in the
