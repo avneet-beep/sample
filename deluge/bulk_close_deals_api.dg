@@ -46,7 +46,7 @@ void bulk_close_deals_api()
 	EXTRA_FIELDS = Map();
 	TAG_NAME = "AutoClosed";
 	NOTE_TITLE = "Auto Closure - System Clean Up";
-	NOTE_CONTENT = "Marking all the deal as closed lost due to this might be moved into expension by our advisour or waiver or any other adjusment, to keep system clean making changes.";
+	NOTE_CONTENT = "Marked as Closed Lost automatically. This deal may have been moved to an expansion by our advisor, or settled through a waiver or another adjustment. It is being closed here to keep the system clean.";
 	USE_CUSTOM_VIEW = true;
 	CUSTOM_VIEW_ID = "833326000092565978";
 	SEARCH_CRITERIA = "(Stage:equals:Qualification) and (Closing_Date:less_than:2025-01-01)";

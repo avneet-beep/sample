@@ -52,7 +52,7 @@ void bulk_close_deals()
 	TAG_ID = "";
 	// Note that gets attached to every Deal.
 	NOTE_TITLE = "Auto Closure - System Clean Up";
-	NOTE_CONTENT = "Marking all the deal as closed lost due to this might be moved into expension by our advisour or waiver or any other adjusment, to keep system clean making changes.";
+	NOTE_CONTENT = "Marked as Closed Lost automatically. This deal may have been moved to an expansion by our advisor, or settled through a waiver or another adjustment. It is being closed here to keep the system clean.";
 	// ---- How the Deals are picked ----
 	// Option A (recommended): use an existing CRM filter / Custom View.
 	//   Open the view in CRM, the cvid is the long number in the URL.
