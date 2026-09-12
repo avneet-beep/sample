@@ -11,19 +11,26 @@ Two Deluge functions that take every Deal in a CRM filter (Custom View) and:
 | `bulk_close_deals.dg` | Up to a few hundred Deals. Uses the built-in `zoho.crm.*` tasks, nothing to set up. | No |
 | `bulk_close_deals_api.dg` | Hundreds to a few thousand Deals. Uses the v8 REST API in batches of 100, so ~20x fewer integration calls. | Yes |
 
-## Read this first: Closed Won vs Closed Lost
+## Target stage
 
-The requirement says *change stage to Closed Won*, but the note text says
-*marking all the deal as closed lost*. Those are opposite outcomes and a mass
-stage change is not easily undone. `TARGET_STAGE` at the top of both files is
-where you decide. It ships as `Closed Won` because that is what the stage
-instruction said.
+`TARGET_STAGE` is set to **Closed Lost**, matching the picklist spelling on the
+Deals layout.
+
+Deals already on a closed stage are skipped, and that list includes
+**Closed Won**. So a won deal sitting inside the filter is left alone rather
+than flipped to lost, which would rewrite closed revenue and forecast history.
+If you really do want won deals flipped, remove that one line from
+`SKIP_STAGES`.
+
+The full picklist is Qualification, Presentation & Demo, Proposal/Price Quote,
+Negotiation/Review, Closed Won, Closed Lost, Closed Lost to Competition.
 
 ## Values already filled in for this org
 
 | Setting | Value |
 |---|---|
 | Custom View (filter) | `833326000092565978` |
+| Target stage | `Closed Lost` |
 | Data centre / API domain | `https://www.zohoapis.in` |
 | Module | `Deals` (shown as Potentials in the URL) |
 
@@ -69,8 +76,11 @@ Note that the fetch itself is capped at 2000 records by the API
 
 The summary mail reports these per Deal, it does not stop the run.
 
-- **Validation rules** on Deals, for example a mandatory *Reason for Loss*
-  when moving to Closed Lost.
+- **Validation rules** on Deals, for example a mandatory loss-reason field
+  when moving to Closed Lost. If the layout demands one, add it to
+  `EXTRA_FIELDS` at the top of the file and it rides along with every update.
+  There is no such field on the Deals module today under the obvious API
+  names, and Closed Lost records already exist, so this is a just-in-case.
 - **Blueprint** on the Deals layout. A Blueprint forces stage movement through
   transitions and blocks a direct API stage write. Set `SKIP_WORKFLOWS = true`
   in the API version, or exclude Blueprint-bound Deals from the filter.

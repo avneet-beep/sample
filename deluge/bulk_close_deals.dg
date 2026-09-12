@@ -9,12 +9,12 @@
               2. Adds the tag             -> AutoClosed   (existing tags kept)
               3. Creates a Note on the Deal explaining the closure
 
- IMPORTANT - READ BEFORE RUNNING
+ TARGET STAGE
  --------------------------------------------------------------------------
- The requirement says "change stage to Closed Won" but the note text says
- "Marking all the deal as closed lost". These contradict each other.
- Set TARGET_STAGE below to whichever is actually correct BEFORE you run this
- with DRY_RUN = false. A mass stage change is not easily reversible.
+ Confirmed target is "Closed Lost" (exact picklist spelling from the Deals
+ layout). The other closing options on that picklist are "Closed Won" and
+ "Closed Lost to Competition"; both are left alone by SKIP_STAGES below.
+ A mass stage change is not easily reversible - dry run first.
  --------------------------------------------------------------------------
 
  SAFETY
@@ -30,8 +30,18 @@ void bulk_close_deals()
 	// ======================== CONFIGURATION ========================
 	// Set to false only after you have reviewed a DRY_RUN execution log.
 	DRY_RUN = true;
-	// Stage to set. "Closed Won" or "Closed Lost" - see note in the header.
-	TARGET_STAGE = "Closed Won";
+	// Stage to set. Must match the picklist spelling exactly.
+	TARGET_STAGE = "Closed Lost";
+	// Deals already sitting on one of these stages are left untouched.
+	// Remove "Closed Won" from this list ONLY if you genuinely want won deals
+	// flipped to lost - that rewrites closed revenue and forecast history.
+	SKIP_STAGES = List();
+	SKIP_STAGES.add("Closed Won");
+	SKIP_STAGES.add("Closed Lost");
+	SKIP_STAGES.add("Closed Lost to Competition");
+	// Any extra field the layout makes mandatory on closure goes here, e.g.
+	// EXTRA_FIELDS.put("Reason_for_Loss","System clean up");
+	EXTRA_FIELDS = Map();
 	// Tag to apply. Create this tag once in Setup > Tags, then paste its ID
 	// here. Passing the ID is what makes the tag stick reliably on update.
 	TAG_NAME = "AutoClosed";
@@ -119,10 +129,10 @@ void bulk_close_deals()
 		current_stage = ifnull(deal.getJSON("Stage"),"");
 		info "----------------------------------------";
 		info "Deal: " + deal_name + " (" + deal_id + ") | Stage: " + current_stage;
-		// --- Idempotency check 1 : already on the target stage ---
-		if(current_stage == TARGET_STAGE)
+		// --- Idempotency check 1 : already on a closed stage ---
+		if(SKIP_STAGES.contains(current_stage))
 		{
-			info "Already on " + TARGET_STAGE + " - skipping";
+			info "Stage is " + current_stage + " - skipping";
 			skipped_count = skipped_count + 1;
 			continue;
 		}
@@ -164,6 +174,10 @@ void bulk_close_deals()
 		update_map = Map();
 		update_map.put("Stage",TARGET_STAGE);
 		update_map.put("Tag",tag_list);
+		for each  extra_key in EXTRA_FIELDS.keys()
+		{
+			update_map.put(extra_key,EXTRA_FIELDS.get(extra_key));
+		}
 		if(DRY_RUN)
 		{
 			info "DRY_RUN - would update with: " + update_map;

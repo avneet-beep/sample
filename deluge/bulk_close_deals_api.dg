@@ -20,9 +20,10 @@
                  ZohoCRM.settings.tags.ALL
                  ZohoCRM.settings.custom_views.READ
 
- IMPORTANT
-   Same Closed Won / Closed Lost contradiction applies - set TARGET_STAGE
-   deliberately, and keep DRY_RUN = true for the first execution.
+ TARGET STAGE
+   Confirmed target is "Closed Lost". "Closed Won" and "Closed Lost to
+   Competition" are left alone by SKIP_STAGES. Keep DRY_RUN = true for the
+   first execution.
 ================================================================================
 */
 void bulk_close_deals_api()
@@ -33,7 +34,16 @@ void bulk_close_deals_api()
 	// Change the domain to match your data centre:
 	//   India .in | Europe .eu | Australia .com.au | China .com.cn | US .com
 	API_DOMAIN = "https://www.zohoapis.in";  // org is on crm.zoho.in
-	TARGET_STAGE = "Closed Won";
+	TARGET_STAGE = "Closed Lost";
+	// Deals already on one of these stages are never touched. Remove
+	// "Closed Won" only if won deals really should be flipped to lost.
+	SKIP_STAGES = List();
+	SKIP_STAGES.add("Closed Won");
+	SKIP_STAGES.add("Closed Lost");
+	SKIP_STAGES.add("Closed Lost to Competition");
+	// Extra fields the layout makes mandatory on closure, e.g.
+	// EXTRA_FIELDS.put("Reason_for_Loss","System clean up");
+	EXTRA_FIELDS = Map();
 	TAG_NAME = "AutoClosed";
 	NOTE_TITLE = "Auto Closure - System Clean Up";
 	NOTE_CONTENT = "Marking all the deal as closed lost due to this might be moved into expension by our advisour or waiver or any other adjusment, to keep system clean making changes.";
@@ -89,8 +99,8 @@ void bulk_close_deals_api()
 		for each  deal in page_data
 		{
 			current_stage = ifnull(deal.getJSON("Stage"),"");
-			// Skip anything already closed the way we want it.
-			if(current_stage == TARGET_STAGE)
+			// Skip anything already sitting on a closed stage.
+			if(SKIP_STAGES.contains(current_stage))
 			{
 				continue;
 			}
@@ -175,6 +185,10 @@ void bulk_close_deals_api()
 			record_map = Map();
 			record_map.put("id",batch_id);
 			record_map.put("Stage",TARGET_STAGE);
+			for each  extra_key in EXTRA_FIELDS.keys()
+			{
+				record_map.put(extra_key,EXTRA_FIELDS.get(extra_key));
+			}
 			update_records.add(record_map);
 		}
 		update_body = Map();
