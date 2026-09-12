@@ -1,0 +1,1037 @@
+void automation.payment_event_notification(map webhook_data)
+{
+	/*
+	================================================================================
+	 Allocation rules for the Deals section
+	   1. A payment first clears UnPaid Bill deals on the BAN, oldest closing date
+	      first. An unpaid bill is: Expansion layout, Created_Via "Monthly
+	      Statement", and "unpaid" somewhere in the deal name (case insensitive).
+	   2. Per unpaid bill, with AMOUNT_TOLERANCE of 50:
+	        within tolerance  -> close at the received amount, difference absorbed
+	        short             -> close at the received amount, raise a Balance deal
+	                             for the shortfall, same details, amount only changed
+	        over              -> close at the bill's own amount, carry the surplus on
+	   3. Whatever is left after the unpaid bills only settles another deal on a
+	      clean match within tolerance. Anything else stays in the Rental Bucket.
+	   4. With no unpaid bills, the old behaviour is unchanged: clean match, then
+	      MisMatch, then the churned rescue, then a new Expansion deal.
+	 The Rental Bucket is written once at the end. Settlement History rows are
+	 appended to what is already there, and Remaining counts down from its current
+	 value, not from Amount.
+	================================================================================
+	*/
+	AMOUNT_TOLERANCE = 50;
+	RENEWAL_LAYOUT = "833326000074437159";
+	EXPANSION_LAYOUT = "833326000077634330";
+	data = webhook_data.getJSON("payload");
+	pan = data.getJSON("pan");
+	info "pan = " + pan;
+	ban = data.getJSON("ban");
+	info "ban = " + ban;
+	if(ban == null || ban == "")
+	{
+		info "Empty BAN received";
+		return;
+	}
+	payment_amount = data.getJSON("payment_amount");
+	final_payment_amount = (payment_amount / 1.18).round(2).toDecimal();
+	info "final payment amount = " + final_payment_amount;
+	if(final_payment_amount <= 0)
+	{
+		info "Invalid payment amount: " + final_payment_amount + " - Amount must be greater than 0. Skipping payment processing.";
+		return;
+	}
+	amount_tolerance = AMOUNT_TOLERANCE;
+	info "Amount tolerance set to: " + amount_tolerance;
+	payment_code = data.getJSON("payment_code");
+	info "payment code = " + payment_code;
+	payment_id = data.getJSON("payment_id");
+	info "payment_id = " + payment_id;
+	payment_date = data.getJSON("payment_date");
+	info "payment_date = " + payment_date;
+	payment_date_time = payment_date.toTime("yyyy-MM-dd'T'HH:mm:ss'Z'");
+	formatted_date = payment_date_time.toString("dd MMM yyyy");
+	info "Formatted date: " + formatted_date;
+	search_payment_code = zoho.crm.searchRecords("Payment_History","(Payment_Code:equals:" + payment_code + ")");
+	if(search_payment_code.size() > 0)
+	{
+		info "Duplicate payment code found: " + payment_code + ". Skipping payment history creation.";
+		return;
+	}
+	search_account = zoho.crm.searchRecords("Accounts","(PAN_Number:equals:" + pan + ")");
+	if(search_account.size() == 0)
+	{
+		info "Error 500 - PAN missing";
+		htmlMessage = "Error 500 - PAN Missing in payment event logic: " + pan + "  " + ban + " . Please add PAN to Accounts module.";
+		sendmail
+		[
+			from :"crm-alerts@myoperator.com"
+			to :"quality.team@myoperator.com"
+			cc:"avneet@myoperator.com"
+			subject :"Error 500 - PAN Missing"
+			message :htmlMessage
+		]
+		return;
+	}
+	account_id = search_account.getJSON("id");
+	info "account id = " + account_id;
+	account_details = zoho.crm.getRecordById("Accounts",account_id);
+	account_owner = account_details.getJSON("Owner").getJSON("id");
+	info "account owner = " + account_owner;
+	search_services = zoho.crm.searchRecords("Services","(Name:equals:" + ban + ")");
+	if(search_services.size() == 0)
+	{
+		info "Error 501 - BAN missing";
+		htmlMessage = "Error 501 - BAN Not Found: " + ban + " for PAN: " + pan;
+		sendmail
+		[
+			from :"crm-alerts@myoperator.com"
+			to :"quality.team@myoperator.com"
+			cc:"avneet@myoperator.com"
+			subject :"Error 501 - BAN Not Found"
+			message :htmlMessage
+		]
+		return;
+	}
+	ban_record = search_services.get(0);
+	ban_id = ban_record.getJSON("id");
+	info "BAN found id = " + ban_id;
+	service_account = ban_record.getJSON("Account");
+	if(service_account != null)
+	{
+		service_account_id = service_account.getJSON("id");
+		if(service_account_id != account_id)
+		{
+			info "Error 504 - Wrong account";
+			htmlMessage = "Error 504 - BAN " + ban + " belongs to wrong account. Expected: " + account_id + ", Found: " + service_account_id;
+			sendmail
+			[
+				from :"crm-alerts@myoperator.com"
+				to :"quality.team@myoperator.com"
+				cc:"avneet@myoperator.com"
+				subject :"Error 504 - BAN Wrong Account"
+				message :htmlMessage
+			]
+			return;
+		}
+	}
+	exsisting_ban_details = zoho.crm.getRecordById("Services",ban_id);
+	ban_type = exsisting_ban_details.getJSON("BAN_Type");
+	info "BAN type = " + ban_type;
+	services_id_for_deal = ban_id;
+	payment_history_id = "";
+	if(ban_type == "Parent")
+	{
+		info "Creating payment for Parent BAN";
+		payment_map = Map();
+		payment_map.put("Name","Payment for " + ban + " " + formatted_date);
+		payment_map.put("Payment_Amount",final_payment_amount);
+		payment_map.put("Payment_Code",payment_code);
+		payment_map.put("Payment_Date",payment_date);
+		payment_map.put("Account",account_id);
+		payment_map.put("Services",ban_id);
+		payment_map.put("Owner",account_owner);
+		create_payment = zoho.crm.createRecord("Payment_History",payment_map);
+		info "Payment created: " + create_payment;
+		payment_history_id = create_payment.get("id");
+		if(payment_history_id == null || payment_history_id == "")
+		{
+			info "Error 503 - Payment History creation failed for Parent BAN: " + ban;
+			htmlMessage = "Error 503 - Payment History creation failed (Parent BAN). BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code;
+			sendmail
+			[
+				from :"crm-alerts@myoperator.com"
+				to :"quality.team@myoperator.com"
+				cc:"avneet@myoperator.com"
+				subject :"Error 503 - Payment History Creation Failed"
+				message :htmlMessage
+			]
+			return;
+		}
+	}
+	else if(ban_type == "Child")
+	{
+		Parent_BAN = exsisting_ban_details.getJSON("Parent_BAN");
+		info "Parent BAN = " + Parent_BAN;
+		if(Parent_BAN == null || Parent_BAN == "")
+		{
+			info "Error 502 - Child without parent";
+			htmlMessage = "Error 502 - Child BAN " + ban + " has no Parent_BAN for PAN: " + pan;
+			sendmail
+			[
+				from :"crm-alerts@myoperator.com"
+				to :"quality.team@myoperator.com"
+				cc:"avneet@myoperator.com"
+				subject :"Error 502 - Child BAN No Parent"
+				message :htmlMessage
+			]
+			return;
+		}
+		parent_ban_id = Parent_BAN.getJSON("id");
+		info "Creating payment against Parent BAN: " + parent_ban_id;
+		payment_map = Map();
+		payment_map.put("Name","Payment for " + ban + " " + formatted_date);
+		payment_map.put("Payment_Amount",final_payment_amount);
+		payment_map.put("Payment_Code",payment_code);
+		payment_map.put("Payment_Date",payment_date);
+		payment_map.put("Account",account_id);
+		payment_map.put("Services",parent_ban_id);
+		payment_map.put("Owner",account_owner);
+		create_payment = zoho.crm.createRecord("Payment_History",payment_map);
+		info "Payment created: " + create_payment;
+		payment_history_id = create_payment.get("id");
+		if(payment_history_id == null || payment_history_id == "")
+		{
+			info "Error 503 - Payment History creation failed for Child BAN: " + ban;
+			htmlMessage = "Error 503 - Payment History creation failed (Child BAN). BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code;
+			sendmail
+			[
+				from :"crm-alerts@myoperator.com"
+				to :"quality.team@myoperator.com"
+				cc:"avneet@myoperator.com"
+				subject :"Error 503 - Payment History Creation Failed"
+				message :htmlMessage
+			]
+			return;
+		}
+		services_id_for_deal = parent_ban_id;
+	}
+	else
+	{
+		// Neither Parent nor Child. Previously this fell through with no Payment
+		// History, and every later write failed in silence.
+		info "Error 508 - BAN_Type is neither Parent nor Child: " + ban_type;
+		htmlMessage = "Error 508 - BAN_Type missing or unrecognised on Services record. BAN: " + ban + " | PAN: " + pan + " | BAN_Type: " + ban_type + " | Payment Code: " + payment_code + ". Set BAN_Type to Parent or Child and replay the payment.";
+		sendmail
+		[
+			from :"crm-alerts@myoperator.com"
+			to :"quality.team@myoperator.com"
+			cc:"avneet@myoperator.com"
+			subject :"Error 508 - BAN Type Not Set"
+			message :htmlMessage
+		]
+		return;
+	}
+	// ==================== CHECK 1: PAYMENT ALREADY IN A RENTAL BUCKET ====================
+	info "Check 1: Searching Rental_Bucket by Transaction_ID (payment_id) first";
+	rental_bucket_found = false;
+	existing_rental_rec = null;
+	if(payment_id != null && payment_id != "")
+	{
+		search_rental_by_trans_id = zoho.crm.searchRecords("Rental_Bucket","(Transaction_ID:equals:" + payment_id + ")");
+		if(search_rental_by_trans_id.size() > 0)
+		{
+			existing_rental_rec = search_rental_by_trans_id.get(0);
+			rental_bucket_found = true;
+			info "Found Rental_Bucket by Transaction_ID";
+		}
+	}
+	if(!rental_bucket_found)
+	{
+		info "Not found by Transaction_ID. Falling back to Payment_Code search.";
+		search_rental_bucket_by_code = zoho.crm.searchRecords("Rental_Bucket","(Payment_Code:equals:" + payment_code + ")");
+		if(search_rental_bucket_by_code.size() > 0)
+		{
+			existing_rental_rec = search_rental_bucket_by_code.get(0);
+			rental_bucket_found = true;
+			info "Found Rental_Bucket by Payment_Code";
+		}
+	}
+	rental_bucket_id = null;
+	skip_rental_bucket_creation = false;
+	rental_bucket_amount = 0;
+	if(rental_bucket_found && existing_rental_rec != null)
+	{
+		rental_bucket_amount = existing_rental_rec.getJSON("Amount");
+		rental_remaining = existing_rental_rec.getJSON("Remaining");
+		rental_bucket_id = existing_rental_rec.getJSON("id");
+		info "Found existing Rental_Bucket - ID: " + rental_bucket_id + ", Amount: " + rental_bucket_amount + ", Remaining: " + rental_remaining;
+		if(rental_bucket_amount == rental_remaining)
+		{
+			info "Amount == Remaining. Reusing this bucket.";
+			skip_rental_bucket_creation = true;
+		}
+		else
+		{
+			info "Payment already used in Rental_Bucket - Amount != Remaining. Skipping deal creation.";
+			payment_update_map = Map();
+			payment_update_map.put("DealCreated","No");
+			payment_update_map.put("CodeStatus","Already used as per Rental Bucket");
+			update_payment = zoho.crm.updateRecord("Payment_History",payment_history_id,payment_update_map);
+			info "Payment History updated with 'Already used' status: " + update_payment;
+			return;
+		}
+	}
+	// ==================== CHECK 2 & CREATE/UPDATE RENTAL BUCKET ====================
+	if(!skip_rental_bucket_creation)
+	{
+		info "Check 2: Looking for Rental_Bucket with blank Payment_Code and matching Amount";
+		search_blank_payment_code = zoho.crm.searchRecords("Rental_Bucket","((Payment_Code:equals:null)and(Amount:equals:" + final_payment_amount + "))");
+		if(search_blank_payment_code != null && search_blank_payment_code.size() > 0)
+		{
+			existing_blank_rec = search_blank_payment_code.get(0);
+			rental_bucket_id = existing_blank_rec.getJSON("id");
+			rental_bucket_amount = existing_blank_rec.getJSON("Amount");
+			existing_remaining = existing_blank_rec.getJSON("Remaining");
+			info "Found Rental_Bucket with blank Payment_Code - ID: " + rental_bucket_id + ". Updating with webhook data.";
+			rental_bucket_update_map = Map();
+			rental_bucket_update_map.put("Account",account_id);
+			rental_bucket_update_map.put("BAN",services_id_for_deal);
+			rental_bucket_update_map.put("Payment_Code",payment_code);
+			rental_bucket_update_map.put("Payment_History",payment_history_id);
+			rental_bucket_update_map.put("Claim_Status","Verified");
+			rental_bucket_update_map.put("Service_Owner",account_owner);
+			rental_bucket_update_map.put("Transaction_ID",payment_id);
+			if(existing_remaining == rental_bucket_amount)
+			{
+				rental_bucket_update_map.put("Status","Not Used");
+			}
+			else if(existing_remaining == 0)
+			{
+				rental_bucket_update_map.put("Status","Used");
+			}
+			update_rental_bucket = zoho.crm.updateRecord("Rental_Bucket",rental_bucket_id,rental_bucket_update_map);
+			info "Rental_Bucket updated with webhook data: " + update_rental_bucket;
+		}
+		else
+		{
+			info "No matching Rental_Bucket found. Creating new Rental_Bucket record.";
+			payment_date_for_crm = payment_date_time.toString("yyyy-MM-dd'T'HH:mm:ssXXX");
+			rental_bucket_map = Map();
+			rental_bucket_map.put("Account",account_id);
+			rental_bucket_map.put("Amount",final_payment_amount);
+			rental_bucket_map.put("BAN",services_id_for_deal);
+			rental_bucket_map.put("Payment_Code",payment_code);
+			rental_bucket_map.put("Payment_History",payment_history_id);
+			rental_bucket_map.put("Claim_Status","Verified");
+			rental_bucket_map.put("Payment_Date",payment_date_for_crm);
+			rental_bucket_map.put("Remaining",final_payment_amount);
+			rental_bucket_map.put("Status","Not Used");
+			rental_bucket_map.put("Owner","833326000065000013");
+			rental_bucket_map.put("Service_Owner",account_owner);
+			rental_bucket_map.put("Transaction_ID",payment_id);
+			rental_bucket_map.put("Date",zoho.currentdate);
+			create_rental_bucket = zoho.crm.createRecord("Rental_Bucket",rental_bucket_map);
+			info "Rental_Bucket created: " + create_rental_bucket;
+			rental_bucket_id = create_rental_bucket.get("id");
+			rental_bucket_amount = final_payment_amount;
+			if(rental_bucket_id == null || rental_bucket_id == "")
+			{
+				info "Error 506 - Rental Bucket creation failed for BAN: " + ban;
+				htmlMessage = "Error 506 - Rental Bucket creation failed. BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code + " | Payment History ID: " + payment_history_id;
+				sendmail
+				[
+					from :"crm-alerts@myoperator.com"
+					to :"quality.team@myoperator.com"
+					cc:"avneet@myoperator.com"
+					subject :"Error 506 - Rental Bucket Creation Failed"
+					message :htmlMessage
+				]
+				return;
+			}
+		}
+	}
+	// ==================== PAYMENT CODE ALREADY ON A DEAL ====================
+	info "Checking if payment code already exists in Deals module";
+	search_payment_code_in_deals = zoho.crm.searchRecords("Deals","(Payment_Code:equals:" + payment_code + ")");
+	if(search_payment_code_in_deals.size() > 0)
+	{
+		deal_count = search_payment_code_in_deals.size();
+		info "Payment code already found in " + deal_count + " deal(s)";
+		first_deal_id = search_payment_code_in_deals.get(0).getJSON("id");
+		first_deal_full = zoho.crm.getRecordById("Deals",first_deal_id);
+		deal_name_from_deal = first_deal_full.getJSON("Deal_Name");
+		deal_layout = first_deal_full.getJSON("$layout_id");
+		type_of_expansion_value = first_deal_full.getJSON("Type_of_Expansion");
+		deal_layout_id = "";
+		deal_layout_name = "";
+		if(deal_layout != null && deal_layout != "")
+		{
+			deal_layout_id = deal_layout.getJSON("id");
+			if(deal_layout_id == RENEWAL_LAYOUT)
+			{
+				deal_layout_name = "Renewal";
+			}
+			else if(deal_layout_id == EXPANSION_LAYOUT)
+			{
+				deal_layout_name = "Expansion";
+			}
+		}
+		type_of_amount_value = "";
+		if(deal_layout_name == "Renewal")
+		{
+			type_of_amount_value = "Renewal";
+		}
+		else if(deal_layout_name == "Expansion")
+		{
+			if(type_of_expansion_value != null && type_of_expansion_value != "")
+			{
+				type_of_amount_value = type_of_expansion_value;
+			}
+			else
+			{
+				type_of_amount_value = "Recharge";
+			}
+		}
+		payment_update_map = Map();
+		payment_update_map.put("CodeStatus","Already Found in deal " + ban + " count of Deal " + deal_count);
+		if(deal_layout_name != "")
+		{
+			payment_update_map.put("Deal_Layout",deal_layout_name);
+		}
+		if(deal_name_from_deal != null && deal_name_from_deal != "")
+		{
+			payment_update_map.put("Deal_Name",deal_name_from_deal);
+		}
+		payment_update_map.put("DealCreated","No");
+		if(type_of_amount_value != "")
+		{
+			payment_update_map.put("Type_of_Amount",type_of_amount_value);
+		}
+		update_payment = zoho.crm.updateRecord("Payment_History",payment_history_id,payment_update_map);
+		info "Payment History updated - Payment code already exists in deals: " + update_payment;
+		return;
+	}
+	else
+	{
+		info "Payment code not found in existing deals - proceeding with normal flow";
+		payment_update_map = Map();
+		payment_update_map.put("CodeStatus","Not found in existing deal");
+		update_payment = zoho.crm.updateRecord("Payment_History",payment_history_id,payment_update_map);
+		info "Payment History CodeStatus updated: " + update_payment;
+	}
+	// ==================== CONTACT LOOKUP ====================
+	contact_email = "contactnotavailable@myoperator.com";
+	contact_phone = "";
+	search_contact_by_ban = zoho.crm.searchRecords("Contacts","(BAN:equals:" + ban + ")");
+	if(search_contact_by_ban.size() > 0)
+	{
+		for each  contact in search_contact_by_ban
+		{
+			contact_status = contact.getJSON("Status");
+			if(contact_status == "Inactive")
+			{
+				continue;
+			}
+			contact_email_field = contact.getJSON("Email");
+			if(contact_email_field == null || contact_email_field == "")
+			{
+				continue;
+			}
+			contact_email = contact_email_field;
+			info "Contact email found from BAN: " + contact_email;
+			contact_mobile = contact.getJSON("Mobile");
+			contact_phone_field = contact.getJSON("Phone");
+			if(contact_mobile != null && contact_mobile != "")
+			{
+				contact_phone = contact_mobile;
+			}
+			else if(contact_phone_field != null && contact_phone_field != "")
+			{
+				contact_phone = contact_phone_field;
+			}
+			break;
+		}
+	}
+	if(contact_email == "contactnotavailable@myoperator.com")
+	{
+		info "No active contact with an email found by BAN, searching by Account";
+		search_contact_by_account = zoho.crm.searchRecords("Contacts","(Account_Name:equals:" + account_id + ")");
+		if(search_contact_by_account.size() > 0)
+		{
+			for each  contact in search_contact_by_account
+			{
+				contact_status = contact.getJSON("Status");
+				if(contact_status == "Inactive")
+				{
+					continue;
+				}
+				contact_email_field = contact.getJSON("Email");
+				if(contact_email_field == null || contact_email_field == "")
+				{
+					continue;
+				}
+				contact_email = contact_email_field;
+				info "Contact email found from Account: " + contact_email;
+				contact_mobile = contact.getJSON("Mobile");
+				contact_phone_field = contact.getJSON("Phone");
+				if(contact_mobile != null && contact_mobile != "")
+				{
+					contact_phone = contact_mobile;
+				}
+				else if(contact_phone_field != null && contact_phone_field != "")
+				{
+					contact_phone = contact_phone_field;
+				}
+				break;
+			}
+		}
+	}
+	if(contact_phone == null || contact_phone == "")
+	{
+		contact_phone = "0000000000";
+		info "No phone found, using default: " + contact_phone;
+	}
+	current_date = zoho.currentdate;
+	deal_name = ban + " Recharge or Usages - " + formatted_date + " - " + payment_code;
+	tag_list = List();
+	tag_map = Map();
+	tag_map.put("name","AutoPayment");
+	tag_map.put("id","833326000105411728");
+	tag_list.add(tag_map);
+	// ==================== ALLOCATION ENGINE ====================
+	available = final_payment_amount;
+	settlement_rows = List();
+	total_used = 0;
+	settled_any = false;
+	split_created = false;
+	mismatch_seen = false;
+	new_deal_created = false;
+	primary_deal_name = "";
+	primary_deal_layout = "";
+	primary_type_of_amount = "";
+	info "=========== ALLOCATION START ===========";
+	info "Available to allocate: " + available;
+	// ---- Sort the BAN's deals into unpaid bills and everything else ----
+	all_deals = zoho.crm.searchRecords("Deals","(Business_Account_Number_BAN:equals:" + services_id_for_deal + ")");
+	info "Deals on BAN: " + all_deals.size();
+	unpaid_ids = List();
+	unpaid_order = Map();
+	other_ids = List();
+	deal_cache = Map();
+	for each  d in all_deals
+	{
+		d_id = d.getJSON("id");
+		d_full = zoho.crm.getRecordById("Deals",d_id);
+		deal_cache.put(d_id,d_full);
+		d_name = ifnull(d_full.getJSON("Deal_Name"),"");
+		d_stage = ifnull(d_full.getJSON("Stage"),"");
+		d_created_via = ifnull(d_full.getJSON("Created_Via"),"");
+		d_code = ifnull(d_full.getJSON("Payment_Code"),"");
+		d_layout_obj = d_full.getJSON("$layout_id");
+		d_layout = "";
+		if(d_layout_obj != null && d_layout_obj != "")
+		{
+			d_layout = d_layout_obj.getJSON("id");
+		}
+		if(d_code != "")
+		{
+			info "SKIP " + d_name + " - already carries payment code " + d_code;
+			continue;
+		}
+		is_expansion = false;
+		if(d_layout == EXPANSION_LAYOUT || d_layout == "")
+		{
+			is_expansion = true;
+		}
+		is_unpaid = false;
+		if(is_expansion && d_created_via == "Monthly Statement" && d_name.toLowerCase().contains("unpaid"))
+		{
+			is_unpaid = true;
+		}
+		if(is_unpaid)
+		{
+			if(d_stage == "Closed Won" || d_stage == "Closed Lost" || d_stage == "Closed Lost to Competition")
+			{
+				info "SKIP unpaid bill " + d_name + " - already closed (" + d_stage + ")";
+				continue;
+			}
+			d_amount_check = ifnull(d_full.getJSON("Amount"),0).toDecimal();
+			if(d_amount_check <= 0)
+			{
+				info "SKIP unpaid bill " + d_name + " - amount is " + d_amount_check;
+				continue;
+			}
+			unpaid_ids.add(d_id);
+			order_key = 99991231;
+			d_close = d_full.getJSON("Closing_Date");
+			if(d_close != null && d_close != "")
+			{
+				order_key = d_close.toDate().toString("yyyyMMdd").toLong();
+			}
+			unpaid_order.put(d_id,order_key);
+			info "UNPAID BILL queued: " + d_name + " | owed " + d_amount_check + " | order " + order_key;
+		}
+		else
+		{
+			other_ids.add(d_id);
+		}
+	}
+	info "Unpaid bills: " + unpaid_ids.size() + " | other deals: " + other_ids.size();
+	// ---- Clear the unpaid bills, oldest closing date first ----
+	done_ids = List();
+	for each  pass in unpaid_ids
+	{
+		if(available <= 0)
+		{
+			break;
+		}
+		pick_id = "";
+		pick_key = 0;
+		for each  uid in unpaid_ids
+		{
+			if(done_ids.contains(uid))
+			{
+				continue;
+			}
+			uk = unpaid_order.get(uid);
+			if(pick_id == "")
+			{
+				pick_id = uid;
+				pick_key = uk;
+			}
+			else if(uk < pick_key)
+			{
+				pick_id = uid;
+				pick_key = uk;
+			}
+		}
+		if(pick_id == "")
+		{
+			break;
+		}
+		done_ids.add(pick_id);
+		u_full = deal_cache.get(pick_id);
+		u_name = ifnull(u_full.getJSON("Deal_Name"),"");
+		u_amount = ifnull(u_full.getJSON("Amount"),0).toDecimal();
+		gap = (available - u_amount).abs();
+		info "----------------------------------------";
+		info "Unpaid bill: " + u_name + " | owed " + u_amount + " | available " + available + " | gap " + gap;
+		applied = 0;
+		case_label = "";
+		if(gap <= amount_tolerance)
+		{
+			applied = available;
+			case_label = "within tolerance";
+		}
+		else if(available < u_amount)
+		{
+			applied = available;
+			case_label = "short";
+		}
+		else
+		{
+			applied = u_amount;
+			case_label = "over";
+		}
+		info "Case: " + case_label + " | applying " + applied;
+		u_update = Map();
+		u_update.put("Payment_Code",payment_code);
+		u_update.put("Amount",applied);
+		u_update.put("Closing_Date",current_date);
+		u_update.put("Stage","Closed Won");
+		u_update.put("Pipeline","Expansion");
+		u_update.put("Tag",tag_list);
+		u_res = zoho.crm.updateRecord("Deals",pick_id,u_update);
+		if(u_res.get("id") == null)
+		{
+			info "UNPAID BILL UPDATE FAILED: " + u_res;
+			continue;
+		}
+		info "Unpaid bill closed at " + applied;
+		row = Map();
+		row.put("Deal_Details",u_name);
+		row.put("Amount_used",applied);
+		row.put("Date",current_date);
+		settlement_rows.add(row);
+		total_used = total_used + applied;
+		available = (available - applied).round(2);
+		settled_any = true;
+		if(primary_deal_name == "")
+		{
+			primary_deal_name = u_name;
+			primary_deal_layout = "Expansion";
+			primary_type_of_amount = ifnull(u_full.getJSON("Type_of_Expansion"),"Recharge");
+		}
+		if(case_label == "short")
+		{
+			balance_amount = (u_amount - applied).round(2);
+			info "Raising balance deal for " + balance_amount;
+			bal_layout = Map();
+			bal_layout.put("name","Expansion_Layout");
+			bal_layout.put("id",EXPANSION_LAYOUT);
+			bal_map = Map();
+			bal_map.put("Deal_Name",u_name + " - Balance");
+			bal_map.put("Amount",balance_amount);
+			bal_map.put("Stage","Qualification");
+			bal_map.put("Closing_Date",current_date.addDay(20));
+			bal_map.put("Created_Via",ifnull(u_full.getJSON("Created_Via"),"Monthly Statement"));
+			bal_map.put("Type_of_Expansion",ifnull(u_full.getJSON("Type_of_Expansion"),"Regular usage (Credits)"));
+			bal_map.put("Pipeline","Expansion");
+			bal_map.put("Product_Required",ifnull(u_full.getJSON("Product_Required"),"Call Plus WhatApp"));
+			bal_map.put("Purpose_Need",ifnull(u_full.getJSON("Purpose_Need"),"UnPaid Bills"));
+			bal_map.put("Business_Account_Number_BAN",services_id_for_deal);
+			bal_map.put("Account_Name",account_id);
+			bal_map.put("Owner",account_owner);
+			bal_map.put("Email",contact_email);
+			bal_map.put("Phone",contact_phone);
+			bal_map.put("Case_Study","Balance of " + u_name + ". Part payment of " + applied + " received against " + u_amount + " under payment code " + payment_code + " on " + formatted_date + ".");
+			bal_map.put("Tag",tag_list);
+			bal_map.put("Layout",bal_layout);
+			bal_res = zoho.crm.createRecord("Deals",bal_map);
+			info "Balance deal: " + bal_res;
+			if(bal_res.get("id") == null)
+			{
+				info "Error 509 - Balance deal creation failed";
+				htmlMessage = "Error 509 - Balance deal creation failed. Original deal: " + u_name + " | Balance: " + balance_amount + " | BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code + ". The original deal was closed at " + applied + ", so this balance is not tracked anywhere.";
+				sendmail
+				[
+					from :"crm-alerts@myoperator.com"
+					to :"quality.team@myoperator.com"
+					cc:"avneet@myoperator.com"
+					subject :"Error 509 - Balance Deal Creation Failed"
+					message :htmlMessage
+				]
+			}
+			else
+			{
+				split_created = true;
+				info "Balance deal created: " + bal_res.get("id");
+			}
+		}
+	}
+	info "After unpaid bills: used " + total_used + " | available " + available;
+	// ---- Whatever is left settles another deal only on a clean match ----
+	if(available > 0 && other_ids.size() > 0)
+	{
+		info "Matching remaining " + available + " against " + other_ids.size() + " other deal(s)";
+		for each  oid in other_ids
+		{
+			o_full = deal_cache.get(oid);
+			o_name = ifnull(o_full.getJSON("Deal_Name"),"");
+			o_stage = ifnull(o_full.getJSON("Stage"),"");
+			o_layout_obj = o_full.getJSON("$layout_id");
+			o_layout = "";
+			if(o_layout_obj != null && o_layout_obj != "")
+			{
+				o_layout = o_layout_obj.getJSON("id");
+			}
+			if(o_layout == RENEWAL_LAYOUT)
+			{
+				if(o_stage == "Renewed" || o_stage == "Churned" || o_stage == "Churned & Retained")
+				{
+					info "SKIP renewal in final stage: " + o_name + " (" + o_stage + ")";
+					continue;
+				}
+				o_expected = o_full.getJSON("Expected_payment");
+				o_discount = o_full.getJSON("Discounted_Amount");
+				matched = false;
+				matched_field = "";
+				if(o_expected != null)
+				{
+					if((o_expected - available).abs() <= amount_tolerance)
+					{
+						matched = true;
+						matched_field = "Expected_payment";
+					}
+				}
+				if(!matched && o_discount != null)
+				{
+					if((o_discount - available).abs() <= amount_tolerance)
+					{
+						matched = true;
+						matched_field = "Discounted_Amount";
+					}
+				}
+				if(matched)
+				{
+					info "Renewal match on " + matched_field + ": " + o_name;
+					r_update = Map();
+					r_update.put("Payment_Code",payment_code);
+					r_update.put("Closing_Date",current_date);
+					r_update.put("Stage","Renewed");
+					r_update.put("Amount",available);
+					r_update.put("Tag",tag_list);
+					r_res = zoho.crm.updateRecord("Deals",oid,r_update);
+					if(r_res.get("id") == null)
+					{
+						info "RENEWAL UPDATE FAILED: " + r_res;
+						continue;
+					}
+					row = Map();
+					row.put("Deal_Details",o_name);
+					row.put("Amount_used",available);
+					row.put("Date",current_date);
+					settlement_rows.add(row);
+					total_used = total_used + available;
+					available = 0;
+					settled_any = true;
+					if(primary_deal_name == "")
+					{
+						primary_deal_name = o_name;
+						primary_deal_layout = "Renewal";
+						primary_type_of_amount = "Renewal";
+					}
+					break;
+				}
+				else
+				{
+					info "Renewal amount mismatch beyond tolerance: " + o_name;
+					mismatch_seen = true;
+				}
+			}
+			else if(o_layout == EXPANSION_LAYOUT || o_layout == "")
+			{
+				if(o_stage == "Closed Won" || o_stage == "Closed Lost" || o_stage == "Closed Lost to Competition")
+				{
+					info "SKIP expansion in final stage: " + o_name + " (" + o_stage + ")";
+					continue;
+				}
+				o_amount = ifnull(o_full.getJSON("Amount"),0).toDecimal();
+				o_gap = (o_amount - available).abs();
+				info "Expansion " + o_name + " | amount " + o_amount + " vs " + available + " | gap " + o_gap;
+				if(o_gap <= amount_tolerance)
+				{
+					e_update = Map();
+					e_update.put("Payment_Code",payment_code);
+					e_update.put("Amount",available);
+					e_update.put("Closing_Date",current_date);
+					e_update.put("Stage","Closed Won");
+					e_update.put("Pipeline","Expansion");
+					e_update.put("Tag",tag_list);
+					e_res = zoho.crm.updateRecord("Deals",oid,e_update);
+					if(e_res.get("id") == null)
+					{
+						info "EXPANSION UPDATE FAILED: " + e_res;
+						continue;
+					}
+					row = Map();
+					row.put("Deal_Details",o_name);
+					row.put("Amount_used",available);
+					row.put("Date",current_date);
+					settlement_rows.add(row);
+					total_used = total_used + available;
+					available = 0;
+					settled_any = true;
+					if(primary_deal_name == "")
+					{
+						primary_deal_name = o_name;
+						primary_deal_layout = "Expansion";
+						primary_type_of_amount = ifnull(o_full.getJSON("Type_of_Expansion"),"Recharge");
+					}
+					break;
+				}
+				else
+				{
+					info "Expansion amount mismatch beyond tolerance: " + o_name;
+					mismatch_seen = true;
+				}
+			}
+		}
+	}
+	// ---- Nothing settled and a deal was scanned: unchanged MisMatch behaviour ----
+	if(!settled_any && mismatch_seen)
+	{
+		info "Deal found but amount mismatch - not creating new deal";
+		payment_update_map = Map();
+		payment_update_map.put("DealCreated","MisMatch");
+		update_payment = zoho.crm.updateRecord("Payment_History",payment_history_id,payment_update_map);
+		info "Payment History updated with MisMatch: " + update_payment;
+		return;
+	}
+	// ---- Nothing settled: churned renewal rescue, unchanged ----
+	if(!settled_any)
+	{
+		info "Checking for Churned Renewal deal within 1 month";
+		search_churned_renewal = zoho.crm.searchRecords("Deals","((Business_Account_Number_BAN:equals:" + services_id_for_deal + ")and(Stage:equals:Churned))");
+		info "Churned Renewal deals found: " + search_churned_renewal.size();
+		if(search_churned_renewal.size() > 0)
+		{
+			one_month_ago = current_date.addMonth(-1);
+			for each  churned_deal in search_churned_renewal
+			{
+				churned_deal_id = churned_deal.getJSON("id");
+				churned_deal_full = zoho.crm.getRecordById("Deals",churned_deal_id);
+				churned_deal_layout = churned_deal_full.getJSON("$layout_id");
+				churned_deal_layout_id = "";
+				if(churned_deal_layout != null && churned_deal_layout != "")
+				{
+					churned_deal_layout_id = churned_deal_layout.getJSON("id");
+				}
+				if(churned_deal_layout_id != RENEWAL_LAYOUT)
+				{
+					info "Skipping - not Renewal layout: " + churned_deal_id;
+					continue;
+				}
+				churned_closing_date = churned_deal_full.getJSON("Closing_Date");
+				if(churned_closing_date == null || churned_closing_date == "")
+				{
+					info "Skipping - no Closing_Date: " + churned_deal_id;
+					continue;
+				}
+				closing_date_time = churned_closing_date.toDate();
+				if(closing_date_time >= one_month_ago && closing_date_time <= current_date)
+				{
+					churned_deal_name = churned_deal_full.getJSON("Deal_Name");
+					info "Churned Renewal within 1 month: " + churned_deal_name;
+					c_update = Map();
+					c_update.put("Payment_Code",payment_code);
+					c_update.put("Closing_Date",current_date);
+					c_update.put("Stage","Churned & Retained");
+					c_update.put("Amount",available);
+					c_update.put("Tag",tag_list);
+					c_res = zoho.crm.updateRecord("Deals",churned_deal_id,c_update);
+					if(c_res.get("id") == null)
+					{
+						info "CHURNED UPDATE FAILED: " + c_res;
+						continue;
+					}
+					row = Map();
+					row.put("Deal_Details",churned_deal_name);
+					row.put("Amount_used",available);
+					row.put("Date",current_date);
+					settlement_rows.add(row);
+					total_used = total_used + available;
+					available = 0;
+					settled_any = true;
+					primary_deal_name = churned_deal_name;
+					primary_deal_layout = "Renewal";
+					primary_type_of_amount = "Renewal";
+					break;
+				}
+				else
+				{
+					info "Churned deal outside 1 month window: " + churned_deal_id;
+				}
+			}
+		}
+	}
+	// ---- Still nothing settled: create a new Expansion deal, unchanged ----
+	if(!settled_any)
+	{
+		info "No matching deal found, creating new deal in Expansion Pipeline";
+		new_layout = Map();
+		new_layout.put("name","Expansion_Layout");
+		new_layout.put("id",EXPANSION_LAYOUT);
+		deal_map = Map();
+		deal_map.put("Deal_Name",deal_name);
+		deal_map.put("Amount",available);
+		deal_map.put("Stage","Closed Won");
+		deal_map.put("Closing_Date",current_date);
+		deal_map.put("Type_of_Expansion","Regular usage (Credits)");
+		deal_map.put("Created_Via","Payment History");
+		deal_map.put("Business_Account_Number_BAN",services_id_for_deal);
+		deal_map.put("Account_Name",account_id);
+		deal_map.put("Payment_Code",payment_code);
+		deal_map.put("Owner",account_owner);
+		deal_map.put("Email",contact_email);
+		deal_map.put("Phone",contact_phone);
+		deal_map.put("Pipeline","Expansion");
+		deal_map.put("Product_Required","Call Plus WhatApp");
+		deal_map.put("Case_Study","Auto Recharge");
+		deal_map.put("Purpose_Need","Auto Recharge");
+		deal_map.put("Tag",tag_list);
+		deal_map.put("Layout",new_layout);
+		create_deal = zoho.crm.createRecord("Deals",deal_map);
+		info "Deal created: " + create_deal;
+		if(create_deal.get("id") == null)
+		{
+			info "Deal creation failed: " + create_deal;
+			payment_update_map = Map();
+			payment_update_map.put("DealCreated","No");
+			update_payment = zoho.crm.updateRecord("Payment_History",payment_history_id,payment_update_map);
+			htmlMessage = "Error 507 - New Expansion Deal creation failed. BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code + " | Payment History ID: " + payment_history_id;
+			sendmail
+			[
+				from :"crm-alerts@myoperator.com"
+				to :"quality.team@myoperator.com"
+				cc:"avneet@myoperator.com"
+				subject :"Error 507 - Expansion Deal Creation Failed"
+				message :htmlMessage
+			]
+			return;
+		}
+		row = Map();
+		row.put("Deal_Details",deal_name);
+		row.put("Amount_used",available);
+		row.put("Date",current_date);
+		settlement_rows.add(row);
+		total_used = total_used + available;
+		available = 0;
+		settled_any = true;
+		primary_deal_name = deal_name;
+		primary_deal_layout = "Expansion";
+		primary_type_of_amount = "Recharge";
+		new_deal_created = true;
+	}
+	// ==================== SETTLE THE RENTAL BUCKET, ONCE ====================
+	if(settled_any)
+	{
+		info "=========== SETTLEMENT ===========";
+		info "Rows to append: " + settlement_rows.size() + " | total used: " + total_used + " | left over: " + available;
+		rb_full = zoho.crm.getRecordById("Rental_Bucket",rental_bucket_id);
+		rb_remaining_now = ifnull(rb_full.getJSON("Remaining"),rental_bucket_amount).toDecimal();
+		rb_amount_now = ifnull(rb_full.getJSON("Amount"),rental_bucket_amount).toDecimal();
+		info "Bucket before: Amount " + rb_amount_now + " | Remaining " + rb_remaining_now;
+		combined_rows = List();
+		existing_rows = rb_full.getJSON("Settlement_History");
+		if(existing_rows != null && existing_rows != "")
+		{
+			for each  er in existing_rows
+			{
+				combined_rows.add(er);
+			}
+		}
+		info "Existing settlement rows kept: " + combined_rows.size();
+		for each  nr in settlement_rows
+		{
+			combined_rows.add(nr);
+		}
+		new_remaining = (rb_remaining_now - total_used).round(2);
+		if(new_remaining < 0)
+		{
+			new_remaining = 0;
+		}
+		info "Remaining " + rb_remaining_now + " - " + total_used + " = " + new_remaining;
+		rb_update = Map();
+		rb_update.put("Remaining",new_remaining);
+		rb_update.put("Settlement_History",combined_rows);
+		if(new_remaining == 0)
+		{
+			rb_update.put("Status","Used");
+		}
+		else if(new_remaining == rb_amount_now)
+		{
+			rb_update.put("Status","Not Used");
+		}
+		rb_res = zoho.crm.updateRecord("Rental_Bucket",rental_bucket_id,rb_update);
+		info "Rental_Bucket settled: " + rb_res;
+		// ---- Payment History ----
+		ph_update = Map();
+		if(primary_deal_name != "")
+		{
+			ph_update.put("Deal_Name",primary_deal_name);
+		}
+		if(primary_deal_layout != "")
+		{
+			ph_update.put("Deal_Layout",primary_deal_layout);
+		}
+		if(primary_type_of_amount != "")
+		{
+			ph_update.put("Type_of_Amount",primary_type_of_amount);
+		}
+		if(available > 0)
+		{
+			ph_update.put("DealCreated","Partial");
+			ph_update.put("CodeStatus","Settled " + total_used + " across " + settlement_rows.size() + " deal(s). " + available + " left unallocated in the Rental Bucket.");
+		}
+		else if(split_created)
+		{
+			ph_update.put("DealCreated","Split");
+			ph_update.put("CodeStatus","Settled in full across " + settlement_rows.size() + " deal(s). Balance deal raised for the shortfall.");
+		}
+		else if(new_deal_created)
+		{
+			ph_update.put("DealCreated","Yes");
+			ph_update.put("CodeStatus","New Expansion deal created");
+		}
+		else
+		{
+			ph_update.put("DealCreated","Updated");
+			ph_update.put("CodeStatus","Settled in full across " + settlement_rows.size() + " deal(s)");
+		}
+		update_payment = zoho.crm.updateRecord("Payment_History",payment_history_id,ph_update);
+		info "Payment History updated: " + update_payment;
+	}
+	info "payment_event_notification finished";
+}
