@@ -2,8 +2,8 @@
 ================================================================================
  Function : bulk_close_deals
  Type     : Standalone Function  (Setup > Developer Space > Functions)
- Purpose  : Bulk close every Deal that matches a CRM filter (Custom View) or a
-            search criteria. For each matching Deal it does three things:
+ Purpose  : Close the Deals sitting in a CRM filter (Custom View). For each
+            eligible Deal it does three things:
 
               1. Updates Stage            -> TARGET_STAGE
               2. Adds the tag             -> AutoClosed   (existing tags kept)
@@ -11,17 +11,18 @@
 
  TARGET STAGE
  --------------------------------------------------------------------------
- Confirmed target is "Closed Lost" (exact picklist spelling from the Deals
- layout). The other closing options on that picklist are "Closed Won" and
- "Closed Lost to Competition"; both are left alone by SKIP_STAGES below.
- A mass stage change is not easily reversible - dry run first.
+ Target is "Closed Lost" (exact picklist spelling from the Deals layout).
+ The other closing options are "Closed Won" and "Closed Lost to Competition";
+ both are left alone by SKIP_STAGES below. A mass stage change is not easily
+ reversible - dry run first.
  --------------------------------------------------------------------------
 
  SAFETY
-   - DRY_RUN = true by default. It only logs what it WOULD do, changes nothing.
-   - MAX_RECORDS_PER_RUN caps how many Deals one execution touches.
-   - Deals already on TARGET_STAGE are skipped (safe to re-run).
-   - Deals already carrying the tag are skipped (safe to re-run).
+   - MAX_RECORDS_PER_RUN counts ELIGIBLE Deals, not fetched rows. Set to 2 so
+     the first live run touches at most two Deals.
+   - DRY_RUN = true logs what it WOULD do and changes nothing.
+   - Deals already on a closed stage are skipped.
+   - Deals already carrying the tag are skipped, so re-runs are safe.
    - A summary mail is sent at the end with counts and failures.
 ================================================================================
 */
@@ -30,6 +31,9 @@ void bulk_close_deals()
 	// ======================== CONFIGURATION ========================
 	// Set to false only after you have reviewed a DRY_RUN execution log.
 	DRY_RUN = true;
+	// PILOT LIMIT. At most this many Deals are changed in one execution.
+	// Start at 2, verify those two records in CRM, then raise it.
+	MAX_RECORDS_PER_RUN = 2;
 	// Stage to set. Must match the picklist spelling exactly.
 	TARGET_STAGE = "Closed Lost";
 	// Deals already sitting on one of these stages are left untouched.
@@ -56,10 +60,9 @@ void bulk_close_deals()
 	USE_CUSTOM_VIEW = true;
 	CUSTOM_VIEW_ID = "833326000092565978";
 	SEARCH_CRITERIA = "(Stage:equals:Qualification) and (Closing_Date:less_than:2025-01-01)";
-	// ---- Volume control ----
+	// ---- Paging ----
 	PER_PAGE = 200;
 	MAX_PAGES = 10;
-	MAX_RECORDS_PER_RUN = 200;
 	// Where the run summary is sent.
 	ALERT_EMAIL = "quality.team@myoperator.com";
 	// ======================= CONFIGURATION ENDS =======================
@@ -67,12 +70,14 @@ void bulk_close_deals()
 	info "bulk_close_deals started";
 	info "DRY_RUN = " + DRY_RUN;
 	info "TARGET_STAGE = " + TARGET_STAGE;
-	info "TAG_NAME = " + TAG_NAME;
+	info "MAX_RECORDS_PER_RUN = " + MAX_RECORDS_PER_RUN;
 	info "=============================================";
+	skipped_count = 0;
 	// ---------------------------------------------------------------
-	// STEP 1 : Collect the Deals
+	// STEP 1 : Collect ELIGIBLE Deals, stop as soon as the cap is hit
 	// ---------------------------------------------------------------
-	all_deals = List();
+	eligible_deals = List();
+	scanned_count = 0;
 	for each index page_num in 1 to MAX_PAGES
 	{
 		page_records = List();
@@ -93,12 +98,42 @@ void bulk_close_deals()
 		}
 		for each  deal in page_records
 		{
-			if(all_deals.size() < MAX_RECORDS_PER_RUN)
+			if(eligible_deals.size() >= MAX_RECORDS_PER_RUN)
 			{
-				all_deals.add(deal);
+				break;
 			}
+			scanned_count = scanned_count + 1;
+			deal_name = ifnull(deal.getJSON("Deal_Name"),"");
+			current_stage = ifnull(deal.getJSON("Stage"),"");
+			// Skip anything already sitting on a closed stage.
+			if(SKIP_STAGES.contains(current_stage))
+			{
+				info "SKIP " + deal_name + " - stage is " + current_stage;
+				skipped_count = skipped_count + 1;
+				continue;
+			}
+			// Skip anything a previous run already tagged.
+			already_tagged = false;
+			existing_tags = deal.getJSON("Tag");
+			if(existing_tags != null && existing_tags != "")
+			{
+				for each  existing_tag in existing_tags
+				{
+					if(existing_tag.getJSON("name") == TAG_NAME)
+					{
+						already_tagged = true;
+					}
+				}
+			}
+			if(already_tagged)
+			{
+				info "SKIP " + deal_name + " - already tagged " + TAG_NAME;
+				skipped_count = skipped_count + 1;
+				continue;
+			}
+			eligible_deals.add(deal);
 		}
-		if(all_deals.size() >= MAX_RECORDS_PER_RUN)
+		if(eligible_deals.size() >= MAX_RECORDS_PER_RUN)
 		{
 			info "MAX_RECORDS_PER_RUN reached - stopping fetch";
 			break;
@@ -108,61 +143,39 @@ void bulk_close_deals()
 			break;
 		}
 	}
-	info "Total Deals picked up = " + all_deals.size();
-	if(all_deals.size() == 0)
+	info "Scanned " + scanned_count + " | skipped " + skipped_count + " | eligible " + eligible_deals.size();
+	if(eligible_deals.size() == 0)
 	{
 		info "Nothing to process - exiting";
 		return;
 	}
 	// ---------------------------------------------------------------
-	// STEP 2 : Process each Deal
+	// STEP 2 : Process the eligible Deals
 	// ---------------------------------------------------------------
 	updated_count = 0;
-	skipped_count = 0;
 	failed_count = 0;
 	note_failed_count = 0;
 	failure_log = List();
-	for each  deal in all_deals
+	for each  deal in eligible_deals
 	{
 		deal_id = deal.getJSON("id");
 		deal_name = ifnull(deal.getJSON("Deal_Name"),"");
 		current_stage = ifnull(deal.getJSON("Stage"),"");
 		info "----------------------------------------";
 		info "Deal: " + deal_name + " (" + deal_id + ") | Stage: " + current_stage;
-		// --- Idempotency check 1 : already on a closed stage ---
-		if(SKIP_STAGES.contains(current_stage))
-		{
-			info "Stage is " + current_stage + " - skipping";
-			skipped_count = skipped_count + 1;
-			continue;
-		}
-		// --- Idempotency check 2 : already tagged by a previous run ---
-		existing_tags = deal.getJSON("Tag");
-		already_tagged = false;
+		// Carry the existing tags forward, otherwise they get wiped.
 		tag_list = List();
+		existing_tags = deal.getJSON("Tag");
 		if(existing_tags != null && existing_tags != "")
 		{
 			for each  existing_tag in existing_tags
 			{
-				existing_tag_name = existing_tag.getJSON("name");
-				if(existing_tag_name == TAG_NAME)
-				{
-					already_tagged = true;
-				}
-				// Carry the existing tags forward, otherwise they get wiped.
 				keep_tag = Map();
-				keep_tag.put("name",existing_tag_name);
+				keep_tag.put("name",existing_tag.getJSON("name"));
 				keep_tag.put("id",existing_tag.getJSON("id"));
 				tag_list.add(keep_tag);
 			}
 		}
-		if(already_tagged)
-		{
-			info "Already carries tag " + TAG_NAME + " - skipping";
-			skipped_count = skipped_count + 1;
-			continue;
-		}
-		// Append the new tag.
 		new_tag = Map();
 		new_tag.put("name",TAG_NAME);
 		if(TAG_ID != null && TAG_ID != "")
@@ -187,8 +200,7 @@ void bulk_close_deals()
 		}
 		// --- Update the Deal ---
 		update_result = zoho.crm.updateRecord("Deals",deal_id,update_map);
-		updated_id = update_result.get("id");
-		if(updated_id == null)
+		if(update_result.get("id") == null)
 		{
 			info "UPDATE FAILED: " + update_result;
 			failed_count = failed_count + 1;
@@ -219,7 +231,7 @@ void bulk_close_deals()
 	// STEP 3 : Summary
 	// ---------------------------------------------------------------
 	info "=============================================";
-	info "Picked up     : " + all_deals.size();
+	info "Eligible      : " + eligible_deals.size();
 	info "Updated       : " + updated_count;
 	info "Skipped       : " + skipped_count;
 	info "Update failed : " + failed_count;
@@ -237,12 +249,13 @@ void bulk_close_deals()
 	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Mode</b></td><td style='border:1px solid #e0e0e0;'>" + run_mode + "</td></tr>";
 	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Target Stage</b></td><td style='border:1px solid #e0e0e0;'>" + TARGET_STAGE + "</td></tr>";
 	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Tag Applied</b></td><td style='border:1px solid #e0e0e0;'>" + TAG_NAME + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Picked Up</b></td><td style='border:1px solid #e0e0e0;'>" + all_deals.size() + "</td></tr>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Updated</b></td><td style='border:1px solid #e0e0e0;'>" + updated_count + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Skipped</b></td><td style='border:1px solid #e0e0e0;'>" + skipped_count + "</td></tr>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Update Failed</b></td><td style='border:1px solid #e0e0e0;'>" + failed_count + "</td></tr>";
-	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Note Failed</b></td><td style='border:1px solid #e0e0e0;'>" + note_failed_count + "</td></tr>";
-	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Run At</b></td><td style='border:1px solid #e0e0e0;'>" + zoho.currenttime + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Cap For This Run</b></td><td style='border:1px solid #e0e0e0;'>" + MAX_RECORDS_PER_RUN + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Eligible</b></td><td style='border:1px solid #e0e0e0;'>" + eligible_deals.size() + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Updated</b></td><td style='border:1px solid #e0e0e0;'>" + updated_count + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Skipped</b></td><td style='border:1px solid #e0e0e0;'>" + skipped_count + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Update Failed</b></td><td style='border:1px solid #e0e0e0;'>" + failed_count + "</td></tr>";
+	mail_body = mail_body + "<tr style='background:#f5f5f5;'><td style='border:1px solid #e0e0e0;'><b>Note Failed</b></td><td style='border:1px solid #e0e0e0;'>" + note_failed_count + "</td></tr>";
+	mail_body = mail_body + "<tr><td style='border:1px solid #e0e0e0;'><b>Run At</b></td><td style='border:1px solid #e0e0e0;'>" + zoho.currenttime + "</td></tr>";
 	mail_body = mail_body + "</table>";
 	if(failure_log.size() > 0)
 	{

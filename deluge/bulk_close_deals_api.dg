@@ -56,7 +56,8 @@ void bulk_close_deals_api()
 	CREATE_NOTES = true;
 	PER_PAGE = 200;
 	MAX_PAGES = 10;
-	MAX_RECORDS_PER_RUN = 1000;
+	// PILOT LIMIT - counts eligible Deals. Raise once the pilot looks right.
+	MAX_RECORDS_PER_RUN = 2;
 	BATCH_SIZE = 100;
 	ALERT_EMAIL = "quality.team@myoperator.com";
 	// ======================= CONFIGURATION ENDS =======================

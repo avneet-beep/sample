@@ -31,6 +31,7 @@ Negotiation/Review, Closed Won, Closed Lost, Closed Lost to Competition.
 |---|---|
 | Custom View (filter) | `833326000092565978` |
 | Target stage | `Closed Lost` |
+| Records per run | `2` (pilot limit, raise after verifying) |
 | Data centre / API domain | `https://www.zohoapis.in` |
 | Module | `Deals` (shown as Potentials in the URL) |
 
@@ -53,13 +54,20 @@ Negotiation/Review, Closed Won, Closed Lost, Closed Lost to Competition.
 
 ## Running it
 
-1. Leave `DRY_RUN = true` and hit **Save & Execute**. Read the execution log.
-   It lists every Deal it would touch and changes nothing.
-2. When the list looks right, set `DRY_RUN = false` and run again.
-3. Check the summary mail for the counts and any failures.
+`MAX_RECORDS_PER_RUN` ships at **2**. It counts Deals that will actually be
+changed, not rows read, so a run cannot touch more than two records even if the
+first hundred rows in the view turn out to be skippable.
 
-Both functions are safe to re-run. A Deal already on the target stage, or
-already carrying the `AutoClosed` tag, is skipped.
+1. Leave `DRY_RUN = true` and hit **Save & Execute**. Read the execution log.
+   It names the two Deals it would touch and changes nothing.
+2. Set `DRY_RUN = false` and run again. Two Deals move to Closed Lost.
+3. Open those two in CRM. Check the stage, the `AutoClosed` tag, and the note
+   in the Notes related list.
+4. Happy? Raise `MAX_RECORDS_PER_RUN` and run for real.
+
+Both functions are safe to re-run. A Deal already on a closed stage, or already
+carrying the `AutoClosed` tag, is skipped, so repeated runs work through the
+filter rather than reprocessing the same records.
 
 ## For very large filters
 
