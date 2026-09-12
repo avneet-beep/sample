@@ -2,6 +2,10 @@
 ================================================================================
  Function : bulk_close_deals
  Type     : Standalone Function  (Setup > Developer Space > Functions)
+ Signature: the editor requires <return_type> <category>.<name>(<args>).
+            Category is "standalone" here. If you create the function under a
+            different category the prefix changes: button.<name> for a custom
+            button, automation.<name> for a workflow function.
  Purpose  : Close the Deals sitting in a CRM filter (Custom View). For each
             eligible Deal it does three things:
 
@@ -26,7 +30,7 @@
    - A summary mail is sent at the end with counts and failures.
 ================================================================================
 */
-void bulk_close_deals()
+void standalone.bulk_close_deals()
 {
 	// ======================== CONFIGURATION ========================
 	// Set to false only after you have reviewed a DRY_RUN execution log.

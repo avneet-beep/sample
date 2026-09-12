@@ -2,6 +2,10 @@
 ================================================================================
  Function : bulk_close_deals_api
  Type     : Standalone Function  (Setup > Developer Space > Functions)
+ Signature: the editor requires <return_type> <category>.<name>(<args>).
+            Category is "standalone" here. If you create the function under a
+            different category the prefix changes: button.<name> for a custom
+            button, automation.<name> for a workflow function.
  Purpose  : Same job as bulk_close_deals, but built for VOLUME.
 
             Instead of one integration call per Deal, it uses the Zoho CRM v8
@@ -26,7 +30,7 @@
    first execution.
 ================================================================================
 */
-void bulk_close_deals_api()
+void standalone.bulk_close_deals_api()
 {
 	// ======================== CONFIGURATION ========================
 	DRY_RUN = true;
