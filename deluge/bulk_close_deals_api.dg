@@ -1,37 +1,38 @@
-/*
-================================================================================
- Function : bulk_close_deals_api
- Type     : Standalone Function  (Setup > Developer Space > Functions)
- Signature: the editor requires <return_type> <category>.<name>(<args>).
-            Category is "standalone" here. If you create the function under a
-            different category the prefix changes: button.<name> for a custom
-            button, automation.<name> for a workflow function.
- Purpose  : Same job as bulk_close_deals, but built for VOLUME.
-
-            Instead of one integration call per Deal, it uses the Zoho CRM v8
-            REST API in batches of 100:
-              PUT  /crm/v8/Deals                      -> stage update
-              POST /crm/v8/Deals/actions/add_tags     -> tag (purely additive)
-              POST /crm/v8/Notes                      -> notes
-
-            1000 Deals costs ~30 integration calls here instead of ~2000.
-
- PREREQUISITE - a Connection
-   Setup > Developer Space > Connections > Create Connection
-     Service   : Zoho OAuth
-     Link Name : zcrm_conn          (paste it into CONNECTION_NAME below)
-     Scopes    : ZohoCRM.modules.ALL
-                 ZohoCRM.settings.tags.ALL
-                 ZohoCRM.settings.custom_views.READ
-
- TARGET STAGE
-   Confirmed target is "Closed Lost". "Closed Won" and "Closed Lost to
-   Competition" are left alone by SKIP_STAGES. Keep DRY_RUN = true for the
-   first execution.
-================================================================================
-*/
 void standalone.bulk_close_deals_api()
 {
+	/*
+	================================================================================
+	 Function : bulk_close_deals_api
+	 Type     : Standalone Function  (Setup > Developer Space > Functions)
+	 Signature: the editor writes the first line itself. Keep whatever it
+	            generated and paste only this body - the category prefix and
+	            the name must match the function you created. A comment placed
+	            ABOVE the signature makes the editor reject the code, which is
+	            why this header lives inside the braces.
+	 Purpose  : Same job as bulk_close_deals, but built for VOLUME.
+
+	            Instead of one integration call per Deal, it uses the Zoho CRM v8
+	            REST API in batches of 100:
+	              PUT  /crm/v8/Deals                      -> stage update
+	              POST /crm/v8/Deals/actions/add_tags     -> tag (purely additive)
+	              POST /crm/v8/Notes                      -> notes
+
+	            1000 Deals costs ~30 integration calls here instead of ~2000.
+
+	 PREREQUISITE - a Connection
+	   Setup > Developer Space > Connections > Create Connection
+	     Service   : Zoho OAuth
+	     Link Name : zcrm_conn          (paste it into CONNECTION_NAME below)
+	     Scopes    : ZohoCRM.modules.ALL
+	                 ZohoCRM.settings.tags.ALL
+	                 ZohoCRM.settings.custom_views.READ
+
+	 TARGET STAGE
+	   Confirmed target is "Closed Lost". "Closed Won" and "Closed Lost to
+	   Competition" are left alone by SKIP_STAGES. Keep DRY_RUN = true for the
+	   first execution.
+	================================================================================
+	*/
 	// ======================== CONFIGURATION ========================
 	DRY_RUN = true;
 	CONNECTION_NAME = "zcrm_conn";

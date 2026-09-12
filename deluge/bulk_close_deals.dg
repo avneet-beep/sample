@@ -1,37 +1,38 @@
-/*
-================================================================================
- Function : bulk_close_deals
- Type     : Standalone Function  (Setup > Developer Space > Functions)
- Signature: the editor requires <return_type> <category>.<name>(<args>).
-            Category is "standalone" here. If you create the function under a
-            different category the prefix changes: button.<name> for a custom
-            button, automation.<name> for a workflow function.
- Purpose  : Close the Deals sitting in a CRM filter (Custom View). For each
-            eligible Deal it does three things:
-
-              1. Updates Stage            -> TARGET_STAGE
-              2. Adds the tag             -> AutoClosed   (existing tags kept)
-              3. Creates a Note on the Deal explaining the closure
-
- TARGET STAGE
- --------------------------------------------------------------------------
- Target is "Closed Lost" (exact picklist spelling from the Deals layout).
- The other closing options are "Closed Won" and "Closed Lost to Competition";
- both are left alone by SKIP_STAGES below. A mass stage change is not easily
- reversible - dry run first.
- --------------------------------------------------------------------------
-
- SAFETY
-   - MAX_RECORDS_PER_RUN counts ELIGIBLE Deals, not fetched rows. Set to 2 so
-     the first live run touches at most two Deals.
-   - DRY_RUN = true logs what it WOULD do and changes nothing.
-   - Deals already on a closed stage are skipped.
-   - Deals already carrying the tag are skipped, so re-runs are safe.
-   - A summary mail is sent at the end with counts and failures.
-================================================================================
-*/
 void standalone.bulk_close_deals()
 {
+	/*
+	================================================================================
+	 Function : bulk_close_deals
+	 Type     : Standalone Function  (Setup > Developer Space > Functions)
+	 Signature: the editor writes the first line itself. Keep whatever it
+	            generated and paste only this body - the category prefix and
+	            the name must match the function you created. A comment placed
+	            ABOVE the signature makes the editor reject the code, which is
+	            why this header lives inside the braces.
+	 Purpose  : Close the Deals sitting in a CRM filter (Custom View). For each
+	            eligible Deal it does three things:
+
+	              1. Updates Stage            -> TARGET_STAGE
+	              2. Adds the tag             -> AutoClosed   (existing tags kept)
+	              3. Creates a Note on the Deal explaining the closure
+
+	 TARGET STAGE
+	 --------------------------------------------------------------------------
+	 Target is "Closed Lost" (exact picklist spelling from the Deals layout).
+	 The other closing options are "Closed Won" and "Closed Lost to Competition";
+	 both are left alone by SKIP_STAGES below. A mass stage change is not easily
+	 reversible - dry run first.
+	 --------------------------------------------------------------------------
+
+	 SAFETY
+	   - MAX_RECORDS_PER_RUN counts ELIGIBLE Deals, not fetched rows. Set to 2 so
+	     the first live run touches at most two Deals.
+	   - DRY_RUN = true logs what it WOULD do and changes nothing.
+	   - Deals already on a closed stage are skipped.
+	   - Deals already carrying the tag are skipped, so re-runs are safe.
+	   - A summary mail is sent at the end with counts and failures.
+	================================================================================
+	*/
 	// ======================== CONFIGURATION ========================
 	// Set to false only after you have reviewed a DRY_RUN execution log.
 	DRY_RUN = true;
