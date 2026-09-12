@@ -52,6 +52,32 @@ void automation.payment_event_notification(map webhook_data)
 	payment_date_time = payment_date.toTime("yyyy-MM-dd'T'HH:mm:ss'Z'");
 	formatted_date = payment_date_time.toString("dd MMM yyyy");
 	info "Formatted date: " + formatted_date;
+	// ==================== ALERT TEMPLATE ====================
+	// Built once so every alert below carries the same block of payment facts.
+	// Sender must stay a verified address in Setup > Channels > Email.
+	ALERT_FROM = "crm-alerts@myoperator.com";
+	ALERT_TO = "quality.team@myoperator.com";
+	ALERT_CC = "avneet@myoperator.com";
+	alert_time = zoho.currenttime;
+	alert_row = "<tr>";
+	alert_k = "<td style='border:1px solid #e0e0e0;width:210px;background:#fafafa;'><b>";
+	alert_v = "</b></td><td style='border:1px solid #e0e0e0;font-family:Consolas,monospace;'>";
+	alert_end = "</td></tr>";
+	alert_open = "<html><body style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#333;line-height:1.5;'><div style='max-width:680px;border:1px solid #e0e0e0;border-radius:4px;padding:22px;'>";
+	alert_tbl = "<table cellpadding='7' cellspacing='0' style='border-collapse:collapse;width:100%;margin:16px 0;font-size:12px;'>";
+	alert_tbl_end = "</table>";
+	alert_close = "<p style='font-size:11px;color:#777;margin-top:18px;border-top:1px solid #eee;padding-top:10px;'>Raised by the Zoho CRM function <b>payment_event_notification</b> at " + alert_time + ". Reply to this thread once the record is corrected, then replay the payment webhook.</p></div></body></html>";
+	alert_facts = "";
+	alert_facts = alert_facts + alert_row + alert_k + "BAN" + alert_v + ban + alert_end;
+	alert_facts = alert_facts + alert_row + alert_k + "PAN" + alert_v + pan + alert_end;
+	alert_facts = alert_facts + alert_row + alert_k + "Payment Code" + alert_v + payment_code + alert_end;
+	alert_facts = alert_facts + alert_row + alert_k + "Payment ID" + alert_v + ifnull(payment_id,"(none)") + alert_end;
+	alert_facts = alert_facts + alert_row + alert_k + "Gross received" + alert_v + payment_amount + alert_end;
+	alert_facts = alert_facts + alert_row + alert_k + "Net of GST (/1.18)" + alert_v + final_payment_amount + alert_end;
+	alert_facts = alert_facts + alert_row + alert_k + "Payment date" + alert_v + formatted_date + alert_end;
+	alert_facts = alert_facts + alert_row + alert_k + "Raised at" + alert_v + alert_time + alert_end;
+	alert_h1 = "<h3 style='color:#c62828;margin:0 0 14px 0;border-bottom:2px solid #c62828;padding-bottom:9px;font-size:15px;'>";
+	alert_h1_end = "</h3>";
 	search_payment_code = zoho.crm.searchRecords("Payment_History","(Payment_Code:equals:" + payment_code + ")");
 	if(search_payment_code.size() > 0)
 	{
@@ -62,13 +88,20 @@ void automation.payment_event_notification(map webhook_data)
 	if(search_account.size() == 0)
 	{
 		info "Error 500 - PAN missing";
-		htmlMessage = "Error 500 - PAN Missing in payment event logic: " + pan + "  " + ban + " . Please add PAN to Accounts module.";
+		htmlMessage = alert_open + alert_h1 + "Error 500 &middot; PAN not found in Accounts" + alert_h1_end;
+		htmlMessage = htmlMessage + "<p><b>What happened.</b> No Account carries this PAN in the PAN_Number field, so the payment cannot be attached to a customer.</p>";
+		htmlMessage = htmlMessage + "<p><b>Impact.</b> Nothing was written. No Payment History, no Rental Bucket, no deal. The payment is not recorded in CRM at all.</p>";
+		htmlMessage = htmlMessage + "<p><b>Fix.</b> Open the customer&#39;s Account and set PAN_Number to the value below, then replay the webhook.</p>";
+		htmlMessage = htmlMessage + alert_tbl + alert_facts;
+		htmlMessage = htmlMessage + alert_row + alert_k + "Searched module" + alert_v + "Accounts" + alert_end;
+		htmlMessage = htmlMessage + alert_row + alert_k + "Searched field" + alert_v + "PAN_Number" + alert_end;
+		htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 		sendmail
 		[
-			from :"crm-alerts@myoperator.com"
-			to :"quality.team@myoperator.com"
-			cc:"avneet@myoperator.com"
-			subject :"Error 500 - PAN Missing"
+			from :ALERT_FROM
+			to :ALERT_TO
+			cc:ALERT_CC
+			subject :"Error 500 | PAN missing in Accounts | BAN " + ban
 			message :htmlMessage
 		]
 		return;
@@ -82,13 +115,21 @@ void automation.payment_event_notification(map webhook_data)
 	if(search_services.size() == 0)
 	{
 		info "Error 501 - BAN missing";
-		htmlMessage = "Error 501 - BAN Not Found: " + ban + " for PAN: " + pan;
+		htmlMessage = alert_open + alert_h1 + "Error 501 &middot; BAN not found in Services" + alert_h1_end;
+		htmlMessage = htmlMessage + "<p><b>What happened.</b> The Account was found by PAN, but no Services record is named with this BAN.</p>";
+		htmlMessage = htmlMessage + "<p><b>Impact.</b> Nothing was written. No Payment History, no Rental Bucket, no deal.</p>";
+		htmlMessage = htmlMessage + "<p><b>Fix.</b> Create the Services record for this BAN, or correct its Name if it was mistyped, then replay the webhook.</p>";
+		htmlMessage = htmlMessage + alert_tbl + alert_facts;
+		htmlMessage = htmlMessage + alert_row + alert_k + "Account matched" + alert_v + account_id + alert_end;
+		htmlMessage = htmlMessage + alert_row + alert_k + "Searched module" + alert_v + "Services" + alert_end;
+		htmlMessage = htmlMessage + alert_row + alert_k + "Searched field" + alert_v + "Name" + alert_end;
+		htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 		sendmail
 		[
-			from :"crm-alerts@myoperator.com"
-			to :"quality.team@myoperator.com"
-			cc:"avneet@myoperator.com"
-			subject :"Error 501 - BAN Not Found"
+			from :ALERT_FROM
+			to :ALERT_TO
+			cc:ALERT_CC
+			subject :"Error 501 | BAN not found in Services | BAN " + ban
 			message :htmlMessage
 		]
 		return;
@@ -103,13 +144,20 @@ void automation.payment_event_notification(map webhook_data)
 		if(service_account_id != account_id)
 		{
 			info "Error 504 - Wrong account";
-			htmlMessage = "Error 504 - BAN " + ban + " belongs to wrong account. Expected: " + account_id + ", Found: " + service_account_id;
+			htmlMessage = alert_open + alert_h1 + "Error 504 &middot; BAN is linked to a different Account" + alert_h1_end;
+			htmlMessage = htmlMessage + "<p><b>What happened.</b> The PAN resolved to one Account, but the Services record for this BAN points at another. The payment would have been credited to the wrong customer.</p>";
+			htmlMessage = htmlMessage + "<p><b>Impact.</b> Nothing was written. This is a deliberate stop, not a failure.</p>";
+			htmlMessage = htmlMessage + "<p><b>Fix.</b> Decide which Account is correct. Either fix the Account lookup on the Services record, or move the PAN. Then replay the webhook.</p>";
+			htmlMessage = htmlMessage + alert_tbl + alert_facts;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Account from PAN" + alert_v + account_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Account on the BAN" + alert_v + service_account_id + alert_end;
+			htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 			sendmail
 			[
-				from :"crm-alerts@myoperator.com"
-				to :"quality.team@myoperator.com"
-				cc:"avneet@myoperator.com"
-				subject :"Error 504 - BAN Wrong Account"
+				from :ALERT_FROM
+				to :ALERT_TO
+				cc:ALERT_CC
+				subject :"Error 504 | BAN linked to wrong Account | BAN " + ban
 				message :htmlMessage
 			]
 			return;
@@ -137,13 +185,23 @@ void automation.payment_event_notification(map webhook_data)
 		if(payment_history_id == null || payment_history_id == "")
 		{
 			info "Error 503 - Payment History creation failed for Parent BAN: " + ban;
-			htmlMessage = "Error 503 - Payment History creation failed (Parent BAN). BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code;
+			htmlMessage = alert_open + alert_h1 + "Error 503 &middot; Payment History could not be created" + alert_h1_end;
+			htmlMessage = htmlMessage + "<p><b>What happened.</b> Account and BAN both resolved, but Zoho rejected the Payment History record. The API response is below.</p>";
+			htmlMessage = htmlMessage + "<p><b>Impact.</b> Nothing downstream ran. No Rental Bucket and no deal. The payment is not recorded.</p>";
+			htmlMessage = htmlMessage + "<p><b>Fix.</b> Read the API response for the rejected field, usually a mandatory field or a validation rule on Payment History. Correct it and replay the webhook.</p>";
+			htmlMessage = htmlMessage + alert_tbl + alert_facts;
+			htmlMessage = htmlMessage + alert_row + alert_k + "BAN type" + alert_v + "Parent" + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Services linked" + alert_v + ban_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Account linked" + alert_v + account_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Owner" + alert_v + account_owner + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "API response" + alert_v + create_payment.toString() + alert_end;
+			htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 			sendmail
 			[
-				from :"crm-alerts@myoperator.com"
-				to :"quality.team@myoperator.com"
-				cc:"avneet@myoperator.com"
-				subject :"Error 503 - Payment History Creation Failed"
+				from :ALERT_FROM
+				to :ALERT_TO
+				cc:ALERT_CC
+				subject :"Error 503 | Payment History creation failed | BAN " + ban
 				message :htmlMessage
 			]
 			return;
@@ -156,13 +214,20 @@ void automation.payment_event_notification(map webhook_data)
 		if(Parent_BAN == null || Parent_BAN == "")
 		{
 			info "Error 502 - Child without parent";
-			htmlMessage = "Error 502 - Child BAN " + ban + " has no Parent_BAN for PAN: " + pan;
+			htmlMessage = alert_open + alert_h1 + "Error 502 &middot; Child BAN has no Parent BAN set" + alert_h1_end;
+			htmlMessage = htmlMessage + "<p><b>What happened.</b> This Services record is marked as a Child, but its Parent_BAN lookup is empty, so there is no parent to attach the payment to.</p>";
+			htmlMessage = htmlMessage + "<p><b>Impact.</b> Nothing was written. No Payment History, no Rental Bucket, no deal.</p>";
+			htmlMessage = htmlMessage + "<p><b>Fix.</b> Set Parent_BAN on the Services record below, then replay the webhook. If this BAN is actually a parent, change BAN_Type to Parent instead.</p>";
+			htmlMessage = htmlMessage + alert_tbl + alert_facts;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Services record" + alert_v + ban_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "BAN type" + alert_v + "Child" + alert_end;
+			htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 			sendmail
 			[
-				from :"crm-alerts@myoperator.com"
-				to :"quality.team@myoperator.com"
-				cc:"avneet@myoperator.com"
-				subject :"Error 502 - Child BAN No Parent"
+				from :ALERT_FROM
+				to :ALERT_TO
+				cc:ALERT_CC
+				subject :"Error 502 | Child BAN has no Parent | BAN " + ban
 				message :htmlMessage
 			]
 			return;
@@ -183,13 +248,23 @@ void automation.payment_event_notification(map webhook_data)
 		if(payment_history_id == null || payment_history_id == "")
 		{
 			info "Error 503 - Payment History creation failed for Child BAN: " + ban;
-			htmlMessage = "Error 503 - Payment History creation failed (Child BAN). BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code;
+			htmlMessage = alert_open + alert_h1 + "Error 503 &middot; Payment History could not be created" + alert_h1_end;
+			htmlMessage = htmlMessage + "<p><b>What happened.</b> Account, child BAN and parent BAN all resolved, but Zoho rejected the Payment History record. The API response is below.</p>";
+			htmlMessage = htmlMessage + "<p><b>Impact.</b> Nothing downstream ran. No Rental Bucket and no deal. The payment is not recorded.</p>";
+			htmlMessage = htmlMessage + "<p><b>Fix.</b> Read the API response for the rejected field, usually a mandatory field or a validation rule on Payment History. Correct it and replay the webhook.</p>";
+			htmlMessage = htmlMessage + alert_tbl + alert_facts;
+			htmlMessage = htmlMessage + alert_row + alert_k + "BAN type" + alert_v + "Child" + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Child Services record" + alert_v + ban_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Parent Services record" + alert_v + parent_ban_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Account linked" + alert_v + account_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "API response" + alert_v + create_payment.toString() + alert_end;
+			htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 			sendmail
 			[
-				from :"crm-alerts@myoperator.com"
-				to :"quality.team@myoperator.com"
-				cc:"avneet@myoperator.com"
-				subject :"Error 503 - Payment History Creation Failed"
+				from :ALERT_FROM
+				to :ALERT_TO
+				cc:ALERT_CC
+				subject :"Error 503 | Payment History creation failed | BAN " + ban
 				message :htmlMessage
 			]
 			return;
@@ -201,13 +276,20 @@ void automation.payment_event_notification(map webhook_data)
 		// Neither Parent nor Child. Previously this fell through with no Payment
 		// History, and every later write failed in silence.
 		info "Error 508 - BAN_Type is neither Parent nor Child: " + ban_type;
-		htmlMessage = "Error 508 - BAN_Type missing or unrecognised on Services record. BAN: " + ban + " | PAN: " + pan + " | BAN_Type: " + ban_type + " | Payment Code: " + payment_code + ". Set BAN_Type to Parent or Child and replay the payment.";
+		htmlMessage = alert_open + alert_h1 + "Error 508 &middot; BAN_Type is not set to Parent or Child" + alert_h1_end;
+		htmlMessage = htmlMessage + "<p><b>What happened.</b> The Services record has a BAN_Type this function does not recognise, so it cannot decide which BAN the payment belongs against.</p>";
+		htmlMessage = htmlMessage + "<p><b>Impact.</b> Nothing was written and the function stopped here on purpose. Before this check existed the run would have carried on with no Payment History and every later write would have failed in silence.</p>";
+		htmlMessage = htmlMessage + "<p><b>Fix.</b> Set BAN_Type on the Services record to Parent or Child, then replay the webhook. Records created before the monthly statement automation began setting this field are the usual cause.</p>";
+		htmlMessage = htmlMessage + alert_tbl + alert_facts;
+		htmlMessage = htmlMessage + alert_row + alert_k + "Services record" + alert_v + ban_id + alert_end;
+		htmlMessage = htmlMessage + alert_row + alert_k + "BAN_Type found" + alert_v + ifnull(ban_type,"(empty)") + alert_end;
+		htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 		sendmail
 		[
-			from :"crm-alerts@myoperator.com"
-			to :"quality.team@myoperator.com"
-			cc:"avneet@myoperator.com"
-			subject :"Error 508 - BAN Type Not Set"
+			from :ALERT_FROM
+			to :ALERT_TO
+			cc:ALERT_CC
+			subject :"Error 508 | BAN_Type not set | BAN " + ban
 			message :htmlMessage
 		]
 		return;
@@ -318,13 +400,22 @@ void automation.payment_event_notification(map webhook_data)
 			if(rental_bucket_id == null || rental_bucket_id == "")
 			{
 				info "Error 506 - Rental Bucket creation failed for BAN: " + ban;
-				htmlMessage = "Error 506 - Rental Bucket creation failed. BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code + " | Payment History ID: " + payment_history_id;
+				htmlMessage = alert_open + alert_h1 + "Error 506 &middot; Rental Bucket could not be created" + alert_h1_end;
+				htmlMessage = htmlMessage + "<p><b>What happened.</b> Payment History was written, but Zoho rejected the Rental Bucket record. The API response is below.</p>";
+				htmlMessage = htmlMessage + "<p><b>Impact.</b> The payment is recorded in Payment History but is not allocatable. No deal was touched and no settlement exists, so this money is invisible to the bucket reports.</p>";
+				htmlMessage = htmlMessage + "<p><b>Fix.</b> Read the API response for the rejected field, create the Rental Bucket by hand if needed, then replay the webhook so the deal allocation runs.</p>";
+				htmlMessage = htmlMessage + alert_tbl + alert_facts;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Payment History record" + alert_v + payment_history_id + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "BAN used for the bucket" + alert_v + services_id_for_deal + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Account linked" + alert_v + account_id + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "API response" + alert_v + create_rental_bucket.toString() + alert_end;
+				htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 				sendmail
 				[
-					from :"crm-alerts@myoperator.com"
-					to :"quality.team@myoperator.com"
-					cc:"avneet@myoperator.com"
-					subject :"Error 506 - Rental Bucket Creation Failed"
+					from :ALERT_FROM
+					to :ALERT_TO
+					cc:ALERT_CC
+					subject :"Error 506 | Rental Bucket creation failed | BAN " + ban
 					message :htmlMessage
 				]
 				return;
@@ -673,13 +764,25 @@ void automation.payment_event_notification(map webhook_data)
 			if(bal_res.get("id") == null)
 			{
 				info "Error 509 - Balance deal creation failed";
-				htmlMessage = "Error 509 - Balance deal creation failed. Original deal: " + u_name + " | Balance: " + balance_amount + " | BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code + ". The original deal was closed at " + applied + ", so this balance is not tracked anywhere.";
+				htmlMessage = alert_open + alert_h1 + "Error 509 &middot; Balance deal could not be created after a part payment" + alert_h1_end;
+				htmlMessage = htmlMessage + "<p><b>What happened.</b> An unpaid bill was part paid. The original deal was closed at the amount received, but the follow-up deal for the shortfall was rejected by Zoho.</p>";
+				htmlMessage = htmlMessage + "<p><b>Impact.</b> This is the one state that loses a receivable quietly. The shortfall below is owed by the customer and is now tracked nowhere in CRM.</p>";
+				htmlMessage = htmlMessage + "<p><b>Fix.</b> Create the balance deal by hand using the figures below, on the Expansion layout with Created_Via of Monthly Statement so the next payment finds it. Leave its Payment Code empty.</p>";
+				htmlMessage = htmlMessage + alert_tbl + alert_facts;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Original deal" + alert_v + u_name + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Originally billed" + alert_v + u_amount + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Amount applied" + alert_v + applied + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Balance still owed" + alert_v + balance_amount + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Payment History record" + alert_v + payment_history_id + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "Rental Bucket record" + alert_v + rental_bucket_id + alert_end;
+				htmlMessage = htmlMessage + alert_row + alert_k + "API response" + alert_v + bal_res.toString() + alert_end;
+				htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 				sendmail
 				[
-					from :"crm-alerts@myoperator.com"
-					to :"quality.team@myoperator.com"
-					cc:"avneet@myoperator.com"
-					subject :"Error 509 - Balance Deal Creation Failed"
+					from :ALERT_FROM
+					to :ALERT_TO
+					cc:ALERT_CC
+					subject :"Error 509 | Balance deal failed, receivable untracked | BAN " + ban
 					message :htmlMessage
 				]
 			}
@@ -930,13 +1033,23 @@ void automation.payment_event_notification(map webhook_data)
 			payment_update_map = Map();
 			payment_update_map.put("DealCreated","No");
 			update_payment = zoho.crm.updateRecord("Payment_History",payment_history_id,payment_update_map);
-			htmlMessage = "Error 507 - New Expansion Deal creation failed. BAN: " + ban + " | PAN: " + pan + " | Payment Code: " + payment_code + " | Payment History ID: " + payment_history_id;
+			htmlMessage = alert_open + alert_h1 + "Error 507 &middot; New Expansion deal could not be created" + alert_h1_end;
+			htmlMessage = htmlMessage + "<p><b>What happened.</b> No existing deal matched the payment, so a fresh Expansion deal was attempted and Zoho rejected it. The API response is below.</p>";
+			htmlMessage = htmlMessage + "<p><b>Impact.</b> Payment History and the Rental Bucket both exist, but the money is unallocated. Remaining on the bucket still shows the full amount.</p>";
+			htmlMessage = htmlMessage + "<p><b>Fix.</b> Read the API response for the rejected field, then either fix it and replay the webhook or create the deal by hand and add a Settlement History row to the bucket.</p>";
+			htmlMessage = htmlMessage + alert_tbl + alert_facts;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Deal name attempted" + alert_v + deal_name + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Amount attempted" + alert_v + available + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Payment History record" + alert_v + payment_history_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "Rental Bucket record" + alert_v + rental_bucket_id + alert_end;
+			htmlMessage = htmlMessage + alert_row + alert_k + "API response" + alert_v + create_deal.toString() + alert_end;
+			htmlMessage = htmlMessage + alert_tbl_end + alert_close;
 			sendmail
 			[
-				from :"crm-alerts@myoperator.com"
-				to :"quality.team@myoperator.com"
-				cc:"avneet@myoperator.com"
-				subject :"Error 507 - Expansion Deal Creation Failed"
+				from :ALERT_FROM
+				to :ALERT_TO
+				cc:ALERT_CC
+				subject :"Error 507 | New Expansion deal failed | BAN " + ban
 				message :htmlMessage
 			]
 			return;
