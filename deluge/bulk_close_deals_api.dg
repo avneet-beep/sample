@@ -66,14 +66,31 @@ void standalone.bulk_close_deals_api()
 	BATCH_SIZE = 100;
 	ALERT_EMAIL = "quality.team@myoperator.com";
 	// ======================= CONFIGURATION ENDS =======================
-	info "bulk_close_deals_api started | DRY_RUN = " + DRY_RUN + " | TARGET_STAGE = " + TARGET_STAGE;
+	info "bulk_close_deals_api started | DRY_RUN = " + DRY_RUN.toString() + " | TARGET_STAGE = " + TARGET_STAGE;
 	// ---------------------------------------------------------------
 	// STEP 1 : Collect the Deal IDs
 	// ---------------------------------------------------------------
 	deal_ids = List();
 	deal_names = Map();
-	for each index page_num in 1 to MAX_PAGES
+	// Deluge has no numeric for-loop, so the page numbers come from a real
+	// list. Add more entries if you ever need to read past page 10.
+	page_list = List();
+	page_list.add(1);
+	page_list.add(2);
+	page_list.add(3);
+	page_list.add(4);
+	page_list.add(5);
+	page_list.add(6);
+	page_list.add(7);
+	page_list.add(8);
+	page_list.add(9);
+	page_list.add(10);
+	for each  page_num in page_list
 	{
+		if(page_num > MAX_PAGES)
+		{
+			break;
+		}
 		fetch_params = Map();
 		fetch_params.put("fields","id,Deal_Name,Stage,Tag");
 		fetch_params.put("page",page_num);
@@ -166,12 +183,19 @@ void standalone.bulk_close_deals_api()
 	note_count = 0;
 	failure_log = List();
 	batch_start = 0;
-	total_batches = (deal_ids.size() / BATCH_SIZE).round(0);
-	if(total_batches * BATCH_SIZE < deal_ids.size())
-	{
-		total_batches = total_batches + 1;
-	}
-	for each index batch_num in 1 to total_batches
+	// Same story here: an explicit list of batch numbers, one per 100 Deals.
+	batch_list = List();
+	batch_list.add(1);
+	batch_list.add(2);
+	batch_list.add(3);
+	batch_list.add(4);
+	batch_list.add(5);
+	batch_list.add(6);
+	batch_list.add(7);
+	batch_list.add(8);
+	batch_list.add(9);
+	batch_list.add(10);
+	for each  batch_num in batch_list
 	{
 		batch_end = batch_start + BATCH_SIZE;
 		if(batch_end > deal_ids.size())
@@ -183,7 +207,7 @@ void standalone.bulk_close_deals_api()
 			break;
 		}
 		batch_ids = deal_ids.subList(batch_start,batch_end);
-		info "--- Batch " + batch_num + " of " + total_batches + " : " + batch_ids.size() + " Deal(s) ---";
+		info "--- Batch " + batch_num + " : " + batch_ids.size() + " Deal(s) ---";
 		// ---- 2a. Stage update ----
 		update_records = List();
 		for each  batch_id in batch_ids
