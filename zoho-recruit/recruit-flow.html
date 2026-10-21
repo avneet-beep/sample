@@ -1,0 +1,185 @@
+<title>Zoho Recruit Flow Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column, each section a labelled diagram followed by short notes */
+:root {
+  --bg: #f6f7f5; --surface: #ffffff; --fg: #1d2421; --muted: #5b6661;
+  --line: #d9dfdb; --accent: #1f7a5a; --tag: #e6f1ec;
+  --display: "Fraunces", Georgia, serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121715; --surface: #1a201d; --fg: #e4ebe7; --muted: #9aa7a0;
+  --line: #2c3530; --accent: #5cc79c; --tag: #1f2c26; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121715; --surface: #1a201d; --fg: #e4ebe7; --muted: #9aa7a0;
+  --line: #2c3530; --accent: #5cc79c; --tag: #1f2c26; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 980px; margin: 0 auto; padding-block: 40px 64px; display: grid; gap: 40px; }
+header { display: grid; gap: 10px; }
+.eyebrow { font: 500 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 600 clamp(28px, 5vw, 40px)/1.15 var(--display); margin: 0; text-wrap: balance; }
+h2 { font: 600 22px/1.25 var(--display); margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 16px; }
+section { display: grid; gap: 14px; min-width: 0; }
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+  padding: 20px; overflow-x: auto; min-width: 0; }
+.diagram pre { margin: 0; }
+.note { background: var(--tag); border-radius: 6px; padding: 14px 16px; font-size: 14px; }
+code { font: 13px var(--mono); background: var(--tag); padding: 1px 5px; border-radius: 3px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.tablewrap { overflow-x: auto; min-width: 0; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+td:first-child { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 72ch; }
+</style>
+
+<main>
+<header>
+  <span class="eyebrow">Zoho Recruit · India DC · REST API v2</span>
+  <h1>How data moves in and out of Zoho Recruit</h1>
+  <p class="lede">The standard Zoho Recruit platform model: what feeds it, the hiring core, and what it sends out. Your account's own modules, custom fields, candidate sources and status stages come from <code>zoho-recruit/explore.py</code> once API access is open.</p>
+</header>
+
+<section>
+  <h2>1. In and out of the platform</h2>
+  <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph IN["Inputs"]
+    CS["Careers page<br/>apply form"]
+    JB["Job boards<br/>Naukri, LinkedIn, Indeed"]
+    EM["Email inbox<br/>resume parser"]
+    VP["Vendor & agency<br/>portal"]
+    RF["Employee<br/>referrals"]
+    IM["CSV / Excel<br/>import"]
+    API_IN["REST API & webhooks in<br/>your code, Claude Code"]
+  end
+
+  subgraph CORE["Zoho Recruit"]
+    CL["Clients & Contacts<br/>(agency edition)"]
+    JO["Job Openings"]
+    CA["Candidates"]
+    AP["Applications<br/>candidate x job"]
+    IV["Interviews"]
+    AS["Assessments"]
+    OF["Offers"]
+    AU["Automation<br/>workflow rules, blueprints,<br/>assignment rules, Deluge"]
+  end
+
+  subgraph OUT["Outputs"]
+    MAIL["Email & SMS<br/>to candidates"]
+    CAL["Calendar invites<br/>Google, Outlook, Zoom"]
+    PEOPLE["Zoho People<br/>onboarding"]
+    CRM["Zoho CRM<br/>client sync"]
+    WH["Outgoing webhooks"]
+    REP["Reports & dashboards"]
+    API_OUT["REST API reads<br/>BI, Claude Code"]
+  end
+
+  CS --> CA
+  JB --> CA
+  EM --> CA
+  VP --> CA
+  RF --> CA
+  IM --> CA
+  API_IN --> CA
+  API_IN --> JO
+
+  CL --> JO
+  JO --> AP
+  CA --> AP
+  AP --> IV
+  AP --> AS
+  IV --> OF
+  AU -.-> AP
+
+  AP --> MAIL
+  IV --> CAL
+  OF --> PEOPLE
+  CL --> CRM
+  AU --> WH
+  CORE --> REP
+  CORE --> API_OUT
+  </pre></div>
+  <p>Every way a candidate enters ends in the <b>Candidates</b> module. Candidates and Job Openings join through <b>Applications</b>, and interviews, assessments and offers hang off that pairing. Automation fires on record changes and is what sends things back out.</p>
+</section>
+
+<section>
+  <h2>2. A candidate's path through hiring</h2>
+  <div class="diagram"><pre class="mermaid">
+flowchart TD
+  A(["Resume arrives"]) --> B{"Duplicate of<br/>existing candidate?"}
+  B -- yes --> M["Merge into existing record"]
+  B -- no --> C["Candidate created<br/>status: New"]
+  M --> D
+  C --> D["Associated to a Job Opening<br/>creates an Application"]
+  D --> E["Screening<br/>recruiter review"]
+  E -- reject --> R1["Rejected<br/>rejection email"]
+  E -- shortlist --> F["Submitted to hiring manager<br/>or client"]
+  F -- reject --> R1
+  F -- approve --> G["Interview scheduled<br/>calendar invite"]
+  G --> H["Interview feedback"]
+  H -- next round --> G
+  H -- reject --> R1
+  H -- select --> I["Offer made"]
+  I -- declined --> R2["Offer declined"]
+  I -- accepted --> J["Hired"]
+  J --> K(["Onboarding<br/>Zoho People"])
+  </pre></div>
+  <p>These stages are the defaults. Zoho lets each account rename and add stages, so <code>explore.py</code> redraws this from your real <i>Candidate Status</i> and <i>Application Status</i> picklists.</p>
+</section>
+
+<section>
+  <h2>3. How Claude Code connects through the API</h2>
+  <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant You as You (api-console.zoho.in)
+  participant CC as Claude Code
+  participant Acc as accounts.zoho.in
+  participant Rec as recruit.zoho.in/recruit/v2
+  You->>Acc: Create Self Client, generate grant code with scopes
+  You->>Acc: Exchange grant code for refresh token (one time)
+  You->>CC: Save client id, secret, refresh token as environment secrets
+  CC->>Acc: POST /oauth/v2/token (refresh_token grant)
+  Acc-->>CC: access_token, valid 1 hour
+  CC->>Rec: GET /org, /users, /settings/modules
+  CC->>Rec: GET /settings/fields, /layouts, /related_lists per module
+  CC->>Rec: GET /{module}?fields=id (record counts only)
+  Rec-->>CC: JSON metadata
+  CC->>CC: Write snapshot.json and diagram.md (Mermaid)
+  </pre></div>
+  <div class="note">The explorer only sends GET requests and stores no candidate data, only structure, picklist values and record counts.</div>
+</section>
+
+<section>
+  <h2>API endpoints the explorer reads</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Endpoint</th><th>What it tells you</th></tr></thead>
+    <tbody>
+      <tr><td>GET /org</td><td>Company, edition (corporate / staffing), time zone, currency</td></tr>
+      <tr><td>GET /users</td><td>Who works in the account, their roles and profiles</td></tr>
+      <tr><td>GET /settings/modules</td><td>Every module, including custom ones</td></tr>
+      <tr><td>GET /settings/fields?module=X</td><td>Fields, custom fields, picklists (sources, statuses) and lookups between modules</td></tr>
+      <tr><td>GET /settings/layouts?module=X</td><td>Layouts per module, such as separate forms per hiring type</td></tr>
+      <tr><td>GET /settings/related_lists?module=X</td><td>What shows under a record (notes, attachments, interviews)</td></tr>
+      <tr><td>GET /{Module}?fields=id</td><td>Record counts, capped at 2,000 per module by default</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>To connect your account</h2>
+  <ol>
+    <li>At <code>api-console.zoho.in</code> create a <b>Self Client</b>.</li>
+    <li>Generate a code with scopes <code>ZohoRecruit.modules.ALL,ZohoRecruit.settings.ALL,ZohoRecruit.users.ALL,ZohoRecruit.org.ALL</code> and exchange it for a refresh token.</li>
+    <li>Allow <code>accounts.zoho.in</code> and <code>recruit.zoho.in</code> in the Claude Code environment's network settings.</li>
+    <li>Add <code>ZOHO_CLIENT_ID</code>, <code>ZOHO_CLIENT_SECRET</code> and <code>ZOHO_REFRESH_TOKEN</code> as environment secrets, then run <code>python3 zoho-recruit/explore.py</code>.</li>
+  </ol>
+</section>
+</main>
